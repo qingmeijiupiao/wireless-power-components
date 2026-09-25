@@ -6,6 +6,7 @@
 
 - 第一阶段（`e73b43e`）：迁入 Lite 与 Pro 工程中整目录一致、无需修改组件文件的部分。
 - 第二阶段：迁入三个工程间功能与 API 一致、仅存在格式差异或缺陷修复差异的非 APP 组件，并以 Lite/Pro 中较新的实现作为统一版本；`shell` 的提示符改为运行时可配置以便各工程共用。
+- `can_resistor` 本质是"带 NVS 持久化的输出 GPIO"，已泛化为通用的 `nvs_gpio_output`；CAN 终端电阻等具体外设语义下沉到各工程的板级门面。
 - 开关工程已接入本批中与硬件无关的组件（`HXC_NVS`、`PWM`、`circular_flash_buffer`、`Interp`、`blackbox`、`ADC`、`wifi_manager`、`shell`）。其 `espnow_link`、`Temperature` 存在协议或功能差异，暂未接入。
 
 ## 目录规划
@@ -29,8 +30,8 @@ components/
 | 第一阶段 | `bsp` | `HXC_TWAI`、`cpp_gpio_driver` |
 | 第一阶段 | `middleware` | `DNSServer`、`energy_meter`、`time_service` |
 | 第二阶段 | `common` | `Interp` |
-| 第二阶段 | `bsp` | `HXC_NVS`、`PWM`、`circular_flash_buffer`、`ADC`、`wifi_manager`、`shell` |
-| 第二阶段 | `middleware` | `blackbox`、`can_resistor`、`ota_manager`、`WebServer`、`Button`、`espnow_link` |
+| 第二阶段 | `bsp` | `HXC_NVS`、`PWM`、`circular_flash_buffer`、`ADC`、`wifi_manager`、`shell`、`nvs_gpio_output` |
+| 第二阶段 | `middleware` | `blackbox`、`ota_manager`、`WebServer`、`Button`、`espnow_link` |
 
 第二阶段的 `ADC`、`wifi_manager`、`WebServer`、`Button`、`espnow_link` 采用 Lite/Pro 中较新的实现（含并发串行化、Captive Portal DNS、探测回落、`PRESS` 事件等修复/扩展）。
 
