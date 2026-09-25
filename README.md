@@ -4,7 +4,9 @@
 
 ## 当前状态
 
-第一阶段已迁入 Lite 与 Pro 工程中整目录一致、无需修改组件文件的部分。按键工程尚未接入本仓库。
+- 第一阶段（`e73b43e`）：迁入 Lite 与 Pro 工程中整目录一致、无需修改组件文件的部分。
+- 第二阶段：迁入三个工程间功能与 API 一致、仅存在格式差异或缺陷修复差异的非 APP 组件，并以 Lite/Pro 中较新的实现作为统一版本；`shell` 的提示符改为运行时可配置以便各工程共用。
+- 开关工程已接入本批中与硬件无关的组件（`HXC_NVS`、`PWM`、`circular_flash_buffer`、`Interp`、`blackbox`、`ADC`、`wifi_manager`、`shell`）。其 `espnow_link`、`Temperature` 存在协议或功能差异，暂未接入。
 
 ## 目录规划
 
@@ -19,15 +21,18 @@ components/
 
 各固件工程通过 ESP-IDF Component Manager 的 Git 依赖引用所需组件，并固定到本仓库的标签或提交。发布版本以整个仓库为单位打标签，各固件工程可分别决定何时升级。
 
-### 第一阶段组件
+### 组件清单
 
-| 分类 | 组件 |
-| --- | --- |
-| `common` | `diagnostic_log` |
-| `bsp` | `HXC_TWAI`、`cpp_gpio_driver` |
-| `middleware` | `DNSServer`、`energy_meter`、`time_service` |
+| 阶段 | 分类 | 组件 |
+| --- | --- | --- |
+| 第一阶段 | `common` | `diagnostic_log` |
+| 第一阶段 | `bsp` | `HXC_TWAI`、`cpp_gpio_driver` |
+| 第一阶段 | `middleware` | `DNSServer`、`energy_meter`、`time_service` |
+| 第二阶段 | `common` | `Interp` |
+| 第二阶段 | `bsp` | `HXC_NVS`、`PWM`、`circular_flash_buffer`、`ADC`、`wifi_manager`、`shell` |
+| 第二阶段 | `middleware` | `blackbox`、`can_resistor`、`ota_manager`、`WebServer`、`Button`、`espnow_link` |
 
-这些组件的文件与迁移前的 Lite、Pro 工程一致。`can_resistor` 虽然两工程中的文件也一致，但其文档链接和组件依赖指向尚未迁入的 `HXC_NVS`，留待后续阶段处理。
+第二阶段的 `ADC`、`wifi_manager`、`WebServer`、`Button`、`espnow_link` 采用 Lite/Pro 中较新的实现（含并发串行化、Captive Portal DNS、探测回落、`PRESS` 事件等修复/扩展）。
 
 涉及 ESP32-C3 按键设备的组件，会先核对硬件差异，并验证 ESP-NOW 协议、配对流程及持久化数据的兼容性。
 
