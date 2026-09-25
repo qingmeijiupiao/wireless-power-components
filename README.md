@@ -1,14 +1,14 @@
-# Wireless Power Components
+# 无线电源系列共用组件
 
-Shared ESP-IDF components for Wireless Power Meter Lite, Wireless Power Meter Pro V2, and Wireless Power Switch Button.
+本仓库用于统一维护无线功率计 Lite、无线功率计 Pro V2 和无线开关按键工程共用的 ESP-IDF 组件。
 
-## Status
+## 当前状态
 
-This repository is being prepared for component extraction. No firmware project currently depends on it. Components will be moved here individually after their interfaces and cross-device behavior are checked.
+仓库已创建，组件尚未迁入；三个固件工程目前都未依赖本仓库。后续会逐个核对组件接口和设备间兼容性，再分批迁移。
 
-## Layout
+## 目录规划
 
-Each component will remain an independent ESP-IDF component with its own `CMakeLists.txt` and, where needed, `idf_component.yml`:
+每个组件保留独立的 `CMakeLists.txt`，需要声明其他组件依赖时再添加 `idf_component.yml`：
 
 ```text
 components/
@@ -17,10 +17,10 @@ components/
   middleware/
 ```
 
-Products will depend on the required component directories through ESP-IDF Component Manager Git dependencies, pinned to a repository tag or commit. Releases will be tagged for the repository as a whole.
+各固件工程通过 ESP-IDF Component Manager 的 Git 依赖引用所需组件，并固定到本仓库的标签或提交。发布版本以整个仓库为单位打标签，各固件工程可分别决定何时升级。
 
-The first extraction candidates are the components already identical between the Lite and Pro projects. Components shared with the ESP32-C3 remote will be unified only after their hardware differences, ESP-NOW protocol, pairing, and stored data compatibility are tested.
+首批候选是 Lite 与 Pro 工程中已经一致的组件。涉及 ESP32-C3 按键设备的组件，会先核对硬件差异，并验证 ESP-NOW 协议、配对流程及持久化数据的兼容性。
 
-## License
+## 开源协议
 
-MIT. See [LICENSE](LICENSE).
+本仓库采用 [MIT 协议](LICENSE)。
