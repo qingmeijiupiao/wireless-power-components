@@ -169,7 +169,12 @@ can_bus.add_can_receive_callback_func(0x201, [](HXC_CAN_message_t* msg) {
 ```
 
 ### 3.3 发送数据：线程安全设计
-`send()` 函数内部使用了局部变量拷贝机制，**允许多个不同的 FreeRTOS 任务同时调用 `can_bus.send()`**，无需手动加互斥锁（Mutex）。
+`send()` **允许多个不同的 FreeRTOS 任务同时调用**，无需手动加互斥锁（Mutex）。
+
+> 注意：底层 `esp_twai` 驱动在硬件繁忙时只保存 `twai_frame_t*` 指针（不会拷贝数据缓冲区），
+> 必须等发送完成前保持 frame 与 buffer 有效。因此 `send()` 内部用互斥锁串行化，并在发送前
+> 等待上一次发送完成，使数据在函数返回前被拷贝进硬件。若直接使用局部栈缓冲并立即返回，
+> 在高负载/发送排队时会出现损坏或丢帧（满载 8000fps 场景尤为明显）。
 
 ```cpp
 void send_command_task(void* arg) {

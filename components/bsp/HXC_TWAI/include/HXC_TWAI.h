@@ -14,14 +14,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 // 性能与资源调节参数 (根据应用场景调整)
 
 /** 软件分发映射表大小：决定了你能同时为多少个特定 ID 注册独立回调函数 */
 constexpr uint8_t MAX_TWAI_CALLBACK_NUM = 10;
 
-/** 接收任务优先级：若处理 8000fps 等极端场景，建议设为 10 以上以抢占普通应用 */
-constexpr UBaseType_t TWAI_RECEIVE_TASK_PRIO = 2;
+/** 接收任务优先级：满载(~8000fps)场景下需高于常规业务任务，避免队列积压。
+ *  接收任务绝大多数时间阻塞在队列上，提高优先级不会长期占用 CPU。 */
+constexpr UBaseType_t TWAI_RECEIVE_TASK_PRIO = 10;
 
 /** 接收任务栈大小：4096 字节足以应对大多数包含打印逻辑的回调 */
 constexpr uint32_t TWAI_RECEIVE_TASK_STACK = 4096;
@@ -29,8 +31,17 @@ constexpr uint32_t TWAI_RECEIVE_TASK_STACK = 4096;
 /** 接收中断优先级[0-3]：默认设为 0*/
 constexpr uint32_t TWAI_RECEIVE_INTR_PRIORITY = 0;
 
-/** 软件接收队列深度：在 8000fps 负载下，深度 50-100 可提供更稳健的系统抖动缓冲 */
-constexpr uint32_t TWAI_RX_QUEUE_LEN = 20;
+/** 总线恢复任务栈大小：仅做延时与一次 twai_node_recover 调用 */
+constexpr uint32_t TWAI_RECOVER_TASK_STACK = 2048;
+
+/** 总线恢复任务优先级：低于收发任务，避免影响实时性 */
+constexpr UBaseType_t TWAI_RECOVER_TASK_PRIO = 1;
+
+/** 进入 bus-off 后延迟多久再启动恢复，避免总线持续故障时高频重试 */
+constexpr uint32_t TWAI_RECOVER_DELAY_MS = 100;
+
+/** 软件接收队列深度：满载 8000fps 时用于吸收调度抖动，避免丢帧 */
+constexpr uint32_t TWAI_RX_QUEUE_LEN = 128;
 
 /** 发送阻塞超时时间 (ms)：当发送硬件 FIFO 满时，函数允许等待的时间 */
 constexpr TickType_t TWAI_SEND_TIMEOUT_MS = pdMS_TO_TICKS(100);
@@ -189,6 +200,9 @@ class HXC_TWAI {
 
     QueueHandle_t         rx_queue       = nullptr; /**< 接收队列句柄，用于解决高并发数据覆盖问题 */
     TaskHandle_t          rx_task_handle = nullptr; /**< 接收任务句柄 */
+    TaskHandle_t          recover_task_handle = nullptr; /**< 总线恢复任务句柄 */
+    SemaphoreHandle_t     tx_mutex       = nullptr; /**< 发送互斥锁，保证发送缓冲区在完成前有效 */
+    volatile bool         bus_off_pending = false;  /**< ISR 置位，恢复任务消费 */
     uint32_t              rx_overflow_count = 0;    /**< 接收队列溢出计数 */
     uint32_t              tx_failed_count   = 0;
     uint32_t              bus_off_count     = 0;
@@ -210,6 +224,11 @@ class HXC_TWAI {
      * @description: TWAI处理数据的独立任务，从队列阻塞读取
      */
     static void receive_task(void* arg);
+
+    /**
+     * @description: bus-off 恢复任务，收到通知后延迟并调用 twai_node_recover
+     */
+    static void recover_task(void* arg);
 
     /**
      * @description: 将队列取出的消息转换并分发给对应的应用层回调函数
