@@ -19,18 +19,13 @@
  */
 class NvsGpioOutput {
   public:
-    struct Config {
-        gpio_num_t  gpio;                  /**< 输出引脚。 */
-        const char* nvs_key;               /**< NVS key，最长 15 字节。 */
-        bool        default_state = false; /**< NVS 无记录时的默认逻辑状态。 */
-        bool        active_high   = true;  /**< true：逻辑 1 输出高电平；false 反相。 */
-    };
-
     /**
      * @brief 构造控制器。
-     * @param config 引脚、NVS key 与极性配置。
+     * @param nvs_key NVS key，最长 15 字节；生命周期需覆盖对象本身。
+     * @param default_state NVS 无记录时的默认逻辑状态。
+     * @param active_high true：逻辑 1 输出高电平；false 反相。
      */
-    explicit NvsGpioOutput(const Config& config);
+    explicit NvsGpioOutput(const char* nvs_key, bool default_state = false, bool active_high = true);
 
     /** @brief 释放内部资源。 */
     ~NvsGpioOutput();
@@ -39,10 +34,11 @@ class NvsGpioOutput {
     NvsGpioOutput& operator=(const NvsGpioOutput&) = delete;
 
     /**
-     * @brief 配置 GPIO，并从 NVS 恢复上次逻辑状态。
+     * @brief 配置输出引脚，并从 NVS 恢复上次逻辑状态。
+     * @param gpio 输出引脚。
      * @return ESP_OK 成功，其他值表示 GPIO 配置或恢复失败。
      */
-    esp_err_t init();
+    esp_err_t init(gpio_num_t gpio);
 
     /**
      * @brief 设置逻辑状态并写入 NVS。

@@ -4,7 +4,7 @@
 
 ## 模块特点
 
-- **通用**：与具体外设无关，引脚、NVS key、极性、默认值均通过 `Config` 配置
+- **通用**：与具体外设无关，NVS key、极性、默认值在构造时配置，引脚在 `init()` 时传入
 - **多实例**：每个实例持有独立的引脚、NVS key 和回调，互不影响
 - **掉电保持**：逻辑状态写入 NVS，`init()` 时自动恢复
 - **写失败回滚**：NVS 持久化失败时回滚 GPIO 电平并返回错误，避免"假成功"
@@ -29,18 +29,13 @@ flowchart TD
 ```cpp
 #include "nvs_gpio_output.h"
 
-static NvsGpioOutput term_resistor({
-    .gpio         = GPIO_NUM_16,
-    .nvs_key      = "can_term",
-    .default_state = false,
-    .active_high   = true,
-});
+static NvsGpioOutput term_resistor("can_term", false, true);
 
 void app_main() {
-    ESP_ERROR_CHECK(term_resistor.init());
     term_resistor.set_on_change_callback([](bool on) {
         ESP_LOGI("APP", "terminal resistor %s", on ? "ON" : "OFF");
     });
+    ESP_ERROR_CHECK(term_resistor.init(GPIO_NUM_16));
     ESP_ERROR_CHECK(term_resistor.toggle());
 }
 ```
@@ -49,19 +44,18 @@ void app_main() {
 
 | API | 说明 |
 |-----|------|
-| `NvsGpioOutput(config)` | 构造实例，`config` 描述引脚、NVS key、默认值与极性 |
-| `init()` | 配置 GPIO 并恢复 NVS 中的逻辑状态 |
+| `NvsGpioOutput(nvs_key, default_state = false, active_high = true)` | 构造实例，绑定 NVS key、默认值与极性 |
+| `init(gpio)` | 配置输出引脚并恢复 NVS 中的逻辑状态 |
 | `set(enabled)` | 设置逻辑状态并持久化，失败回滚 |
 | `toggle()` | 翻转逻辑状态并持久化 |
 | `get()` | 获取当前逻辑状态 |
 | `set_on_change_callback(callback)` | 状态变化回调（含 `init()` 恢复时触发一次） |
 
-## Config 字段
+## 构造参数
 
-| 字段 | 类型 | 默认 | 说明 |
+| 参数 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `gpio` | `gpio_num_t` | — | 输出引脚 |
-| `nvs_key` | `const char*` | — | NVS key，最长 15 字节，超长截断并告警 |
+| `nvs_key` | `const char*` | — | NVS key，最长 15 字节，超长截断并告警；生命周期需覆盖对象 |
 | `default_state` | `bool` | `false` | NVS 无记录时的默认逻辑状态 |
 | `active_high` | `bool` | `true` | `true` 逻辑 1 输出高电平；`false` 反相 |
 
