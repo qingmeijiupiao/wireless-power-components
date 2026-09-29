@@ -7,7 +7,7 @@
 - 第一阶段（`e73b43e`）：迁入 Lite 与 Pro 工程中整目录一致、无需修改组件文件的部分。
 - 第二阶段：迁入三个工程间功能与 API 一致、仅存在格式差异或缺陷修复差异的非 APP 组件，并以 Lite/Pro 中较新的实现作为统一版本；`shell` 的提示符改为运行时可配置以便各工程共用。
 - `can_resistor` 本质是"带 NVS 持久化的输出 GPIO"，已泛化为通用的 `nvs_gpio_output`；CAN 终端电阻等具体外设语义下沉到各工程的板级门面。
-- 开关工程已接入本批中与硬件无关的组件（`HXC_NVS`、`PWM`、`circular_flash_buffer`、`Interp`、`blackbox`、`ADC`、`wifi_manager`、`shell`）。其 `espnow_link`、`Temperature` 存在协议或功能差异，暂未接入。
+- 开关工程已接入本批中与硬件无关的组件（`HXC_NVS`、`PWM`、`circular_flash_buffer`、`Interp`、`blackbox`、`ADC`、`wifi_manager`、`shell`）。本轮进一步统一了 `espnow_link`，`Temperature` 仍保留在产品工程。
 
 ## 目录规划
 
@@ -18,6 +18,7 @@ components/
   common/
   bsp/
   middleware/
+  product/                    产品系列共享的业务组件
 ```
 
 各固件工程通过 ESP-IDF Component Manager 的 Git 依赖引用所需组件，并固定到本仓库的标签或提交。发布版本以整个仓库为单位打标签，各固件工程可分别决定何时升级。
@@ -40,3 +41,25 @@ components/
 ## 开源协议
 
 本仓库采用 [MIT 协议](LICENSE)。
+
+## 按钮与急停工程共用组件（2026-09-29，本地迁移）
+
+只迁移至少两个工程会使用的组件。SH1106 驱动仍在急停工程，未迁入本仓库。
+
+| 组件 | 位置 | 消费工程 |
+|---|---|---|
+| `battery_level` | `components/middleware/battery_level` | 按钮、急停 |
+| `blackbox_service` | `components/middleware/blackbox_service` | 按钮、急停 |
+| `espnow_remote` | `components/product/espnow_remote` | 按钮、急停 |
+| `espnow_service_remote` | `components/product/espnow_service_remote` | 按钮、急停 |
+| `espnow_link`（已有，统一引用） | `components/middleware/espnow_link` | 按钮、急停；Lite/Pro 按原有固定版本使用 |
+
+- `product` 表示系列内业务复用，并非通用 ESP-NOW 协议。`espnow_service_remote` 保留 `EspNowService` 命名空间与头文件，但对输出请求返回 NOT_READY；不能替换功率计接收端的 `espnow_service`。
+- 日志捕获由应用传入静态 INFO 标签表，WARN/ERROR 的捕获和内部标签排除行为保持不变。此版本仍要求 Log V1。
+- 电量估算保留原有实测单节锂电曲线、显示单调策略及 RTC 三副本；不适用于任意电池。正式急停电池型号变化时须复核曲线。
+- 链路的 `CONFIG_ESPNOW_LINK_TASK_STACK_SIZE` 默认 4096；按钮和急停配置为原按钮使用的 5120。帧编码、配对报文及 peer 存储布局没有改变。
+- 两个消费工程通过 `main/idf_component.yml` 的相邻本地路径引用本轮组件；其他公共依赖仍固定在原 Git 提交。本轮未提交或发布，单独 checkout 产品工程的 CI 不能解析这些相邻路径。发布时应先提交/发布公共仓库，再将消费工程路径换成同一固定 Git 提交，并重建 lock 文件。
+- 按钮手势、急停状态机、硬件引脚、电池采样/校准、休眠、状态灯和页面仍属于各产品。
+- 急停当前只运行屏幕 bring-up；`-D ESTOP_VALIDATE_SHARED_REMOTE=ON` 可编译共享遥控组件，但不会启动无线控制。
+
+本机回归：`python tests/run_shared_host_tests.py`，使用真实迁移源码验证日志筛选和固定协议字节；并非硬件/无线时序测试。
