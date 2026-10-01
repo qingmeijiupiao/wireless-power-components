@@ -9,7 +9,7 @@
 
 #include "esp_random.h"
 #include "espnow_codec.h"
-#include "espnow_service_internal.h"
+#include "espnow_service_proto.h"
 #include "freertos/FreeRTOS.h"
 
 namespace EspNowService {
@@ -27,13 +27,6 @@ CallbackSlot<SwitchResponseHandler> switch_response_slot = {};
 CallbackSlot<DataReceivedHandler> data_received_slot = {};
 RemoteSwitchStatus remote_switch_status = {};
 EspNowLink::MacAddress remote_switch_address = {};
-
-// 固定长度协议。接收时严格匹配，避免接受截断包或未知版本的尾随字段。
-constexpr size_t SWITCH_REQUEST_SIZE = 5;
-constexpr size_t SWITCH_RESPONSE_SIZE = 7;
-constexpr size_t REMOTE_BATTERY_SIZE = 1;
-constexpr size_t DATA_REQUEST_SIZE = 4;
-constexpr size_t DATA_MESSAGE_SIZE = 40;
 
 uint32_t next_request_id() {
     const uint32_t value = esp_random();
@@ -60,18 +53,6 @@ void set_callback(CallbackSlot<Handler>* slot, Handler handler, void* context) {
     slot->handler = handler;
     slot->context = handler == nullptr ? nullptr : context;
     portEXIT_CRITICAL(&callback_lock);
-}
-
-/** @brief 生成控制请求、数据请求和对应响应使用的可靠单播选项。 */
-EspNowLink::SendOptions reliable_options() {
-    EspNowLink::SendOptions options = {};
-    options.delivery = EspNowLink::Delivery::RELIABLE;
-    return options;
-}
-
-/** @brief 请求和响应只接受可靠单播，拒绝广播及尽力传输包。 */
-bool is_reliable_unicast(const EspNowLink::Message& message) {
-    return message.reliable && !message.destination.is_broadcast();
 }
 
 /** @brief 记录本次运行已经收到合法控制包，并锁定对应遥控器地址。 */

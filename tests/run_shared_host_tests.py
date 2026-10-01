@@ -90,11 +90,20 @@ int main(int argc, char**) {
 '''
 
 WIRE_TEST = r'''
-#include "espnow_service_internal.h"
+#include "espnow_service_proto.h"
 #include <cassert>
 #include <cstring>
 using namespace EspNowService;
 using namespace EspNowService::Internal;
+// Host stub: espnow_link's real implementation is not compiled in this test.
+namespace EspNowLink {
+bool MacAddress::is_broadcast() const {
+    for (uint8_t value : bytes) {
+        if (value != 0xFF) return false;
+    }
+    return true;
+}
+}
 int main() {
     uint8_t out[40]{};
     const SwitchRequest request{0x12345678,SwitchAction::OFF};
@@ -130,11 +139,11 @@ def main():
         for name, text in STUBS.items():
             f=work/name; f.parent.mkdir(parents=True,exist_ok=True); f.write_text(text)
         log=ROOT/'components/middleware/blackbox_service'
-        proto=ROOT/'components/product/espnow_service_remote'
+        proto=ROOT/'components/product/espnow_service_proto'
         suites=[('log', LOG_TEST, [log/'src/blackbox_service.cpp',log/'src/blackbox_log_capture.cpp'],
                  [log/'include',log/'private_include']),
-                ('wire',WIRE_TEST,[proto/'src/espnow_service_business_protocol.cpp'],
-                 [proto/'include',proto/'private_include',ROOT/'components/middleware/espnow_link/include'])]
+                ('wire',WIRE_TEST,[proto/'src/espnow_service_proto.cpp'],
+                 [proto/'include',ROOT/'components/middleware/espnow_link/include'])]
         for name, source, sources, includes in suites:
             harness=work/f'{name}.cpp'; harness.write_text(source)
             binary=work/(name+('.exe' if os.name=='nt' else ''))

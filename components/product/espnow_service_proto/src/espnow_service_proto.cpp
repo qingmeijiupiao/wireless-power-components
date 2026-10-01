@@ -1,23 +1,25 @@
 /*
- * @Description: ESP-NOW 产品业务 payload 编码
+ * @Description: ESP-NOW 产品业务 payload 编解码与传输语义校验
  *
  * 线上协议采用固定偏移、固定宽度和小端格式，不直接发送 C++ 结构体内存，从而避免
- * 对齐填充、编译器 ABI 和 CPU 端序差异。接收解码与业务处理位于 business.cpp。
+ * 对齐填充、编译器 ABI 和 CPU 端序差异。遥控端与接收端共用本实现，业务处理位于
+ * 各自的 business.cpp。
  */
-#include "espnow_service_internal.h"
+#include "espnow_service_proto.h"
 
 #include "espnow_codec.h"
 
 namespace EspNowService::Internal {
-namespace {
 
-constexpr size_t SWITCH_REQUEST_SIZE = 5;
-constexpr size_t SWITCH_RESPONSE_SIZE = 7;
-constexpr size_t REMOTE_BATTERY_SIZE = 1;
-constexpr size_t DATA_REQUEST_SIZE = 4;
-constexpr size_t DATA_MESSAGE_SIZE = 40;
+EspNowLink::SendOptions reliable_options() {
+    EspNowLink::SendOptions options = {};
+    options.delivery = EspNowLink::Delivery::RELIABLE;
+    return options;
+}
 
-} // namespace
+bool is_reliable_unicast(const EspNowLink::Message& message) {
+    return message.reliable && !message.destination.is_broadcast();
+}
 
 /**
  * @brief 编码开关控制请求
@@ -38,9 +40,7 @@ size_t encode_switch_request(const SwitchRequest& request, uint8_t* output, size
  * @layout [0..3] request_id, [4] action, [5] result, [6] output_on
  * @return 成功时返回 7，参数或容量无效时返回 0
  */
-size_t encode_switch_response(const SwitchResponse& response,
-                              uint8_t* output,
-                              size_t capacity) {
+size_t encode_switch_response(const SwitchResponse& response, uint8_t* output, size_t capacity) {
     if (output == nullptr || capacity < SWITCH_RESPONSE_SIZE) {
         return 0;
     }
@@ -82,6 +82,7 @@ size_t encode_data_request(uint32_t request_id, uint8_t* output, size_t capacity
  * - [5]      status_flags
  * - [6..39]  电压、电流、温度、电量、能量和计量时间
  *
+ * 有符号值直接按其固定宽度补码写入，不进行单位换算。
  * @return 成功时返回 40，参数或容量无效时返回 0
  */
 size_t encode_data_message(const DataMessage& message, uint8_t* output, size_t capacity) {
@@ -93,10 +94,8 @@ size_t encode_data_message(const DataMessage& message, uint8_t* output, size_t c
     output[5] = message.data.status_flags;
     EspNowLink::Codec::store_le<uint16_t>(output + 6, message.data.voltage_mv);
     EspNowLink::Codec::store_le<int32_t>(output + 8, message.data.current_ua);
-    EspNowLink::Codec::store_le<int16_t>(
-        output + 12, message.data.board_temperature_centi_c);
-    EspNowLink::Codec::store_le<int16_t>(
-        output + 14, message.data.chip_temperature_centi_c);
+    EspNowLink::Codec::store_le<int16_t>(output + 12, message.data.board_temperature_centi_c);
+    EspNowLink::Codec::store_le<int16_t>(output + 14, message.data.chip_temperature_centi_c);
     EspNowLink::Codec::store_le<int64_t>(output + 16, message.data.charge_uah);
     EspNowLink::Codec::store_le<int64_t>(output + 24, message.data.energy_uwh);
     EspNowLink::Codec::store_le<uint64_t>(output + 32, message.data.meter_time_ms);
