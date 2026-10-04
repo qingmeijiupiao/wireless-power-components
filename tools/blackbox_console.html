@@ -291,8 +291,7 @@
                         break;
                     }
                     if (value) {
-                        term.write(value);
-                        handleIncoming(value);
+                        pump(value);
                     }
                 }
             } catch (error) {
@@ -308,6 +307,23 @@
                 connect();
             }
         });
+
+        // ESP-IDF 的交互式 Shell 进入 linenoise 后会发出 ESC[6n 查询光标位置，
+        // 必须由终端应答，否则会阻塞、吞掉后续命令。这里统一由工具应答，
+        // 并从送往 xterm 的数据里去掉该查询，避免依赖 xterm 自身的实现。
+        function pump(value) {
+            let shown = value;
+            if (value.indexOf('\x1b[6n') >= 0) {
+                shown = shown.split('\x1b[6n').join('');
+                if (writer) writer.write('\x1b[1;1R');
+            }
+            if (value.indexOf('\x1b[5n') >= 0) {
+                shown = shown.split('\x1b[5n').join('');
+                if (writer) writer.write('\x1b[0n');
+            }
+            if (shown) term.write(shown);
+            handleIncoming(value);
+        }
 
         function handleIncoming(text) {
             lineBuffer += text.replace(ANSI, '');
@@ -451,7 +467,7 @@
                     return;
                 }
                 await writeRaw('\r');
-                await sleep(250);
+                await sleep(350);
                 await writeRaw(cmd + '\r');
                 await sleep(100);
             });
