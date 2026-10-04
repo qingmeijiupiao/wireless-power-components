@@ -1,585 +1,539 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>无线电源系列 黑匣子串口控制台</title>
-<style>
-  :root {
-    --bg: #14171c;
-    --panel: #1c2027;
-    --panel-2: #232830;
-    --line: #313844;
-    --fg: #d7dde6;
-    --muted: #8b95a3;
-    --accent: #4c9aff;
-    --accent-2: #35c47a;
-    --warn: #e8a838;
-    --err: #e5605a;
-    --mono: "Cascadia Mono", "Consolas", "Menlo", "Liberation Mono", monospace;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; }
-  body {
-    background: var(--bg);
-    color: var(--fg);
-    font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
-    font-size: 14px;
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-  }
-  header {
-    padding: 10px 16px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--line);
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
-  header h1 {
-    font-size: 15px;
-    font-weight: 600;
-    margin: 0 12px 0 0;
-    white-space: nowrap;
-  }
-  .spacer { flex: 1 1 auto; }
-  button, select, input[type="text"], input[type="number"] {
-    background: var(--panel-2);
-    color: var(--fg);
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 13px;
-    font-family: inherit;
-  }
-  button { cursor: pointer; }
-  button:hover:not(:disabled) { border-color: var(--accent); }
-  button:disabled { opacity: 0.45; cursor: not-allowed; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #08111f; font-weight: 600; }
-  button.ok { border-color: var(--accent-2); color: var(--accent-2); }
-  button.danger { border-color: var(--err); color: var(--err); }
-  label.inline { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
-  .tabs { display: flex; gap: 4px; padding: 6px 16px 0; background: var(--panel); border-bottom: 1px solid var(--line); }
-  .tab {
-    padding: 8px 16px;
-    border: 1px solid transparent;
-    border-bottom: none;
-    border-radius: 8px 8px 0 0;
-    color: var(--muted);
-    cursor: pointer;
-    background: transparent;
-  }
-  .tab.active { background: var(--bg); border-color: var(--line); color: var(--fg); }
-  main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .view { flex: 1 1 auto; min-height: 0; display: none; flex-direction: column; }
-  .view.active { display: flex; }
-  .toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-    padding: 8px 16px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--line);
-  }
-  #terminal {
-    flex: 1 1 auto;
-    margin: 0;
-    padding: 12px 16px;
-    overflow: auto;
-    font-family: var(--mono);
-    font-size: 13px;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
-    background: var(--bg);
-  }
-  #terminal .sys { color: var(--muted); }
-  #terminal .ok { color: var(--accent-2); }
-  #terminal .warn { color: var(--warn); }
-  #terminal .err { color: var(--err); }
-  .promptbar {
-    display: flex;
-    gap: 8px;
-    padding: 8px 16px;
-    background: var(--panel);
-    border-top: 1px solid var(--line);
-  }
-  .promptbar input { flex: 1 1 auto; font-family: var(--mono); }
-  #logTableWrap { flex: 1 1 auto; overflow: auto; padding: 0 16px 16px; }
-  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 12.5px; }
-  th, td { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
-  th { position: sticky; top: 0; background: var(--panel-2); color: var(--muted); font-weight: 600; }
-  td.num { color: var(--muted); white-space: nowrap; }
-  td.type { white-space: nowrap; }
-  td.text { word-break: break-word; }
-  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
-  .badge.STRING { color: var(--accent-2); border-color: var(--accent-2); }
-  .badge.STRUCTURED { color: var(--accent); border-color: var(--accent); }
-  .badge.UNKNOWN, .badge.INVALID { color: var(--err); border-color: var(--err); }
-  #status {
-    padding: 6px 16px;
-    background: var(--panel-2);
-    border-top: 1px solid var(--line);
-    color: var(--muted);
-    font-size: 12px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .empty { color: var(--muted); padding: 24px 8px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>黑匣子串口控制台</h1>
-  <button id="btnConnect" class="primary">连接串口</button>
-  <button id="btnDisconnect" disabled>断开</button>
-  <label class="inline">波特率
-    <select id="baud">
-      <option>9600</option>
-      <option>19200</option>
-      <option>38400</option>
-      <option>57600</option>
-      <option selected>115200</option>
-      <option>230400</option>
-      <option>460800</option>
-      <option>921600</option>
-    </select>
-  </label>
-  <label class="inline">行尾
-    <select id="lineEnding">
-      <option value="\n" selected>LF</option>
-      <option value="\r">CR</option>
-      <option value="\r\n">CRLF</option>
-    </select>
-  </label>
-  <span class="spacer"></span>
-  <button id="btnClearTerminal">清空终端</button>
-</header>
-
-<div class="tabs">
-  <div class="tab active" data-view="terminalView">终端</div>
-  <div class="tab" data-view="logView">黑匣子日志</div>
-</div>
-
-<main>
-  <section id="terminalView" class="view active">
-    <div class="toolbar">
-      <button data-cmd="version">版本</button>
-      <button data-cmd="blackbox status">状态</button>
-      <button data-cmd="blackbox dump 100">拉取100条</button>
-      <button data-cmd="blackbox dump all">拉取全部</button>
-      <button class="danger" data-cmd="blackbox clear">清空黑匣子</button>
-    </div>
-    <pre id="terminal"></pre>
-    <div class="promptbar">
-      <input id="cmdInput" type="text" placeholder="输入命令后回车，例如 blackbox dump 100" autocomplete="off" spellcheck="false" disabled />
-      <button id="btnSend" disabled>发送</button>
-    </div>
-    <div id="status">未连接</div>
-  </section>
-
-  <section id="logView" class="view">
-    <div class="toolbar">
-      <label class="inline">拉取最新
-        <input id="pullCount" type="number" min="1" value="100" style="width:90px" />
-        条
-      </label>
-      <button id="btnPullN">拉取最新N条</button>
-      <button id="btnPullAll">拉取全部</button>
-      <button id="btnClearTable">清空表格</button>
-      <span class="spacer"></span>
-      <button id="btnExportRaw">导出原始txt</button>
-      <button id="btnExportParsed">导出解析txt</button>
-    </div>
-    <div id="captureState" class="toolbar" style="border-bottom:none;color:var(--muted)">
-      未捕获。点击“拉取最新N条”或“拉取全部”开始。
-    </div>
-    <div id="logTableWrap">
-      <table>
-        <thead>
-          <tr><th>#</th><th>时间戳(ms)</th><th>类型</th><th>分片</th><th>内容</th></tr>
-        </thead>
-        <tbody id="logBody"></tbody>
-      </table>
-      <div id="logEmpty" class="empty">暂无日志。请先在“终端”页连接串口。</div>
-    </div>
-  </section>
-</main>
-
-<script>
-(() => {
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-  const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
-
-  const els = {
-    btnConnect: document.getElementById('btnConnect'),
-    btnDisconnect: document.getElementById('btnDisconnect'),
-    baud: document.getElementById('baud'),
-    lineEnding: document.getElementById('lineEnding'),
-    btnClearTerminal: document.getElementById('btnClearTerminal'),
-    terminal: document.getElementById('terminal'),
-    cmdInput: document.getElementById('cmdInput'),
-    btnSend: document.getElementById('btnSend'),
-    status: document.getElementById('status'),
-    captureState: document.getElementById('captureState'),
-    pullCount: document.getElementById('pullCount'),
-    btnPullN: document.getElementById('btnPullN'),
-    btnPullAll: document.getElementById('btnPullAll'),
-    btnClearTable: document.getElementById('btnClearTable'),
-    btnExportRaw: document.getElementById('btnExportRaw'),
-    btnExportParsed: document.getElementById('btnExportParsed'),
-    logBody: document.getElementById('logBody'),
-    logEmpty: document.getElementById('logEmpty'),
-  };
-
-  let port = null;
-  let reader = null;
-  let writer = null;
-  let keepReading = false;
-  let connected = false;
-
-  let terminalText = '';
-  const TERMINAL_LIMIT = 400000;
-
-  let lineBuffer = '';
-  let capturing = false;
-  let capturedLines = [];
-  let capturedRaw = [];
-  let records = [];
-
-  function setStatus(text, cls) {
-    els.status.textContent = text;
-    els.status.style.color = cls === 'err' ? 'var(--err)' : cls === 'ok' ? 'var(--accent-2)' : 'var(--muted)';
-  }
-
-  function appendTerminal(text, cls) {
-    terminalText += text;
-    if (terminalText.length > TERMINAL_LIMIT) {
-      terminalText = terminalText.slice(terminalText.length - TERMINAL_LIMIT);
-    }
-    if (cls) {
-      const span = document.createElement('span');
-      span.className = cls;
-      span.textContent = text;
-      els.terminal.appendChild(span);
-    } else {
-      els.terminal.appendChild(document.createTextNode(text));
-    }
-    els.terminal.scrollTop = els.terminal.scrollHeight;
-  }
-
-  function clearTerminal() {
-    terminalText = '';
-    els.terminal.textContent = '';
-  }
-
-  async function connect() {
-    if (!('serial' in navigator)) {
-      setStatus('当前浏览器不支持 Web Serial，请使用 Chrome/Edge。', 'err');
-      return;
-    }
-    try {
-      port = await navigator.serial.requestPort();
-      await port.open({ baudRate: Number(els.baud.value) });
-      writer = port.writable.getWriter();
-      connected = true;
-      keepReading = true;
-      els.btnConnect.disabled = true;
-      els.btnDisconnect.disabled = false;
-      els.cmdInput.disabled = false;
-      els.btnSend.disabled = false;
-      setStatus('已连接 ' + Number(els.baud.value) + ' baud', 'ok');
-      appendTerminal('--- 串口已连接 ---\n', 'sys');
-      readLoop();
-    } catch (err) {
-      setStatus('连接失败: ' + err.message, 'err');
-    }
-  }
-
-  async function disconnect() {
-    keepReading = false;
-    try {
-      if (reader) {
-        await reader.cancel().catch(() => {});
-        reader = null;
-      }
-      if (writer) {
-        writer.releaseLock();
-        writer = null;
-      }
-      if (port) {
-        await port.close();
-        port = null;
-      }
-    } catch (err) {
-      setStatus('断开异常: ' + err.message, 'err');
-    } finally {
-      connected = false;
-      els.btnConnect.disabled = false;
-      els.btnDisconnect.disabled = true;
-      els.cmdInput.disabled = true;
-      els.btnSend.disabled = true;
-      setStatus('未连接');
-      appendTerminal('--- 串口已断开 ---\n', 'sys');
-    }
-  }
-
-  async function readLoop() {
-    while (keepReading && port && port.readable) {
-      reader = port.readable.getReader();
-      try {
-        while (keepReading) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          if (value && value.length) {
-            handleChunk(decoder.decode(value, { stream: true }));
-          }
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>黑匣子串口控制台</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: "Microsoft YaHei", system-ui, sans-serif;
+            background: #1e1e1e;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
         }
-      } catch (err) {
-        if (keepReading) setStatus('读取错误: ' + err.message, 'err');
-      } finally {
-        try { reader.releaseLock(); } catch (_) {}
-        reader = null;
-      }
-    }
-  }
+        .header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            padding: 10px 14px;
+            background: #252526;
+            border-bottom: 1px solid #333;
+        }
+        .header h2 { font-size: 15px; margin: 0 12px 0 0; white-space: nowrap; }
+        .spacer { flex: 1 1 auto; }
+        button {
+            padding: 7px 14px;
+            font-size: 13px;
+            cursor: pointer;
+            background: #007acc;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover { background: #005999; }
+        button:disabled { background: #444; color: #999; cursor: not-allowed; }
+        button.ghost { background: #3a3d41; }
+        button.ghost:hover { background: #4a4e52; }
+        button.danger { background: #a33; }
+        button.danger:hover { background: #822; }
+        select, input {
+            padding: 6px 8px;
+            font-size: 13px;
+            background: #3c3c3c;
+            color: #fff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            font-family: inherit;
+        }
+        input[type=number] { width: 74px; }
+        label.inline { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: #bbb; }
+        #main { flex: 1 1 auto; min-height: 0; display: flex; }
+        #terminal {
+            flex: 1 1 auto;
+            min-width: 0;
+            background: #000;
+            padding: 4px;
+        }
+        #panel {
+            width: 440px;
+            flex: 0 0 440px;
+            border-left: 1px solid #333;
+            background: #202124;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        #panel.hidden { display: none; }
+        .panel-section { padding: 10px 12px; border-bottom: 1px solid #333; }
+        .panel-section.grow { flex: 1 1 auto; min-height: 0; padding: 0; display: flex; flex-direction: column; }
+        .panel-title { font-size: 13px; color: #9cdcfe; margin-bottom: 8px; font-weight: 600; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+        .row:last-child { margin-bottom: 0; }
+        .hint { font-size: 12px; color: #999; }
+        .hint.ok { color: #4ec9b0; }
+        .hint.err { color: #f48771; }
+        #tableWrap { flex: 1 1 auto; overflow: auto; min-height: 0; }
+        table { border-collapse: collapse; width: 100%; font-size: 12px; font-family: Consolas, monospace; }
+        th, td { border-bottom: 1px solid #333; padding: 4px 7px; text-align: left; vertical-align: top; }
+        th {
+            position: sticky;
+            top: 0;
+            background: #2d2d30;
+            color: #9cdcfe;
+            z-index: 1;
+            white-space: nowrap;
+        }
+        td.num { color: #888; white-space: nowrap; }
+        td.text { word-break: break-word; }
+        .badge { padding: 1px 6px; border-radius: 8px; font-size: 11px; border: 1px solid; white-space: nowrap; }
+        .badge.STRING { color: #4ec9b0; border-color: #4ec9b0; }
+        .badge.STRUCTURED { color: #569cd6; border-color: #569cd6; }
+        .badge.UNKNOWN, .badge.INVALID { color: #f48771; border-color: #f48771; }
+        #empty { color: #777; padding: 16px 12px; font-size: 12px; }
+    </style>
+</head>
 
-  function handleChunk(text) {
-    const clean = text.replace(ANSI, '');
-    appendTerminal(clean);
-    lineBuffer += clean;
-    let idx;
-    while ((idx = lineBuffer.indexOf('\n')) >= 0) {
-      const rawLine = lineBuffer.slice(0, idx);
-      lineBuffer = lineBuffer.slice(idx + 1);
-      processLine(rawLine.replace(/\r$/, ''));
-    }
-  }
+<body>
+    <div class="header">
+        <h2>黑匣子串口控制台</h2>
+        <label class="inline">波特率
+            <select id="baud">
+                <option>921600</option>
+                <option>460800</option>
+                <option>230400</option>
+                <option selected>115200</option>
+                <option>57600</option>
+                <option>38400</option>
+                <option>19200</option>
+                <option>9600</option>
+            </select>
+        </label>
+        <button id="connectBtn">连接串口设备</button>
+        <button id="clearTermBtn" class="ghost">清空终端</button>
+        <button id="togglePanelBtn" class="ghost">隐藏日志面板</button>
+        <span class="spacer"></span>
+        <button id="exportRawBtn" class="ghost">导出原始txt</button>
+        <button id="exportParsedBtn" class="ghost">导出解析txt</button>
+    </div>
 
-  function processLine(line) {
-    if (line.indexOf('BLACKBOX_DUMP_BEGIN') >= 0) {
-      capturing = true;
-      capturedLines = [];
-      capturedRaw = [];
-      els.captureState.textContent = '正在捕获黑匣子日志...';
-      els.captureState.style.color = 'var(--accent)';
-      return;
-    }
-    if (!capturing) return;
-    capturedRaw.push(line);
-    if (line.indexOf('BLACKBOX_DUMP_END') >= 0) {
-      capturing = false;
-      renderRecords(parseDump(capturedRaw));
-      els.captureState.textContent = '捕获完成，共 ' + records.length + ' 条记录';
-      els.captureState.style.color = 'var(--accent-2)';
-      return;
-    }
-    capturedLines.push(line);
-  }
+    <div id="main">
+        <div id="terminal"></div>
+        <aside id="panel">
+            <div class="panel-section">
+                <div class="panel-title">黑匣子操作</div>
+                <div class="row">
+                    <button id="btnStatus" class="ghost">状态</button>
+                    <button id="btnClearBB" class="danger">清空黑匣子</button>
+                </div>
+                <div class="row">
+                    <span class="hint">拉取最新</span>
+                    <input id="pullCount" type="number" min="1" step="1" value="100">
+                    <span class="hint">条</span>
+                    <button id="btnPullN">拉取</button>
+                </div>
+                <div class="row">
+                    <button id="btnPullAll" class="ghost">拉取全部日志</button>
+                </div>
+                <div class="row">
+                    <input id="markText" type="text" placeholder="写入人工标记文本" style="flex:1 1 auto; min-width: 0;">
+                    <button id="btnMark" class="ghost">写标记</button>
+                </div>
+                <div id="captureState" class="hint">未捕获。点击“拉取”或“拉取全部日志”开始。</div>
+            </div>
+            <div class="panel-section grow">
+                <div id="tableWrap">
+                    <table>
+                        <thead>
+                            <tr><th>#</th><th>时间戳(ms)</th><th>类型</th><th>分片</th><th>内容</th></tr>
+                        </thead>
+                        <tbody id="logBody"></tbody>
+                    </table>
+                    <div id="empty">暂无解析结果。</div>
+                </div>
+            </div>
+        </aside>
+    </div>
 
-  function parseDump(lines) {
-    const out = [];
-    for (const line of lines) {
-      const canonical = line.match(/^record=(\d+)\s+timestamp_ms=(\d+)\s+type=(\w+)(?:\s+fragments=(\d+))?(?:\s+(text|payload)=(.*))?$/);
-      if (canonical) {
-        out.push({
-          index: Number(canonical[1]),
-          timestamp: Number(canonical[2]),
-          type: canonical[3],
-          fragments: canonical[4] ? Number(canonical[4]) : '',
-          value: canonical[6] || '',
-          kind: canonical[5] || '',
+    <script>
+        const term = new Terminal({
+            cursorBlink: true,
+            convertEol: true,
+            fontSize: 13,
+            theme: { background: '#000000' }
         });
-        continue;
-      }
-      const invalid = line.match(/^record=(\d+)\s+type=INVALID$/);
-      if (invalid) {
-        out.push({ index: Number(invalid[1]), timestamp: '', type: 'INVALID', fragments: '', value: '', kind: '' });
-        continue;
-      }
-      const legacy = line.match(/^r=(\d+)\s+t_ms=(\d+)\s+n=(\d+)\s+(.*)$/);
-      if (legacy) {
-        out.push({
-          index: Number(legacy[1]),
-          timestamp: Number(legacy[2]),
-          type: 'STRING',
-          fragments: Number(legacy[3]),
-          value: legacy[4],
-          kind: 'text',
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById('terminal'));
+        fitAddon.fit();
+        window.addEventListener('resize', () => fitAddon.fit());
+
+        const els = {
+            connectBtn: document.getElementById('connectBtn'),
+            baud: document.getElementById('baud'),
+            clearTermBtn: document.getElementById('clearTermBtn'),
+            togglePanelBtn: document.getElementById('togglePanelBtn'),
+            panel: document.getElementById('panel'),
+            exportRawBtn: document.getElementById('exportRawBtn'),
+            exportParsedBtn: document.getElementById('exportParsedBtn'),
+            btnStatus: document.getElementById('btnStatus'),
+            btnClearBB: document.getElementById('btnClearBB'),
+            pullCount: document.getElementById('pullCount'),
+            btnPullN: document.getElementById('btnPullN'),
+            btnPullAll: document.getElementById('btnPullAll'),
+            markText: document.getElementById('markText'),
+            btnMark: document.getElementById('btnMark'),
+            captureState: document.getElementById('captureState'),
+            logBody: document.getElementById('logBody'),
+            empty: document.getElementById('empty'),
+        };
+
+        let port = null;
+        let reader = null;
+        let writer = null;
+        let readableStreamClosed = null;
+        let writableStreamClosed = null;
+        let onDataDisposable = null;
+
+        let lineBuffer = '';
+        let capturing = false;
+        let capturedRaw = [];
+        let records = [];
+        let sendChain = Promise.resolve();
+
+        const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        term.writeln('\x1b[33m黑匣子串口控制台：点击“连接串口设备”开始；也可直接在此输入 Shell 命令。\x1b[0m\r\n');
+
+        function setCaptureState(text, cls) {
+            els.captureState.textContent = text;
+            els.captureState.className = 'hint' + (cls ? ' ' + cls : '');
+        }
+
+        if ('serial' in navigator) {
+            navigator.serial.addEventListener('disconnect', () => {
+                term.writeln('\x1b[31m\r\n--- 设备已物理断开 ---\x1b[0m\r\n');
+                resetUI();
+            });
+        }
+
+        function resetUI() {
+            port = null;
+            reader = null;
+            writer = null;
+            readableStreamClosed = null;
+            writableStreamClosed = null;
+            if (onDataDisposable) {
+                onDataDisposable.dispose();
+                onDataDisposable = null;
+            }
+            els.connectBtn.innerText = '连接串口设备';
+            els.connectBtn.disabled = false;
+        }
+
+        async function disconnect() {
+            try {
+                if (reader) {
+                    await reader.cancel();
+                }
+                if (readableStreamClosed) {
+                    await readableStreamClosed.catch(() => {});
+                }
+                if (writer) {
+                    await writer.close();
+                }
+                if (writableStreamClosed) {
+                    await writableStreamClosed;
+                }
+                if (port) {
+                    await port.close();
+                }
+                term.writeln('\x1b[33m\r\n--- 已断开连接 ---\x1b[0m\r\n');
+            } catch (error) {
+                term.writeln(`\x1b[31m\r\n[断开异常] ${error}\x1b[0m\r\n`);
+            } finally {
+                resetUI();
+            }
+        }
+
+        async function connect() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: Number(els.baud.value) });
+
+                els.connectBtn.innerText = '断开连接';
+                term.writeln('\x1b[32m\r\n--- 串口已连接 ---\x1b[0m\r\n');
+
+                const textEncoder = new TextEncoderStream();
+                writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+
+                const textDecoder = new TextDecoderStream();
+                readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+                reader = textDecoder.readable.getReader();
+
+                onDataDisposable = term.onData((data) => {
+                    if (writer) writer.write(data);
+                });
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        if (reader) reader.releaseLock();
+                        break;
+                    }
+                    if (value) {
+                        term.write(value);
+                        handleIncoming(value);
+                    }
+                }
+            } catch (error) {
+                term.writeln(`\x1b[31m\r\n[串口异常] ${error}\x1b[0m\r\n`);
+                resetUI();
+            }
+        }
+
+        els.connectBtn.addEventListener('click', () => {
+            if (port) {
+                disconnect();
+            } else {
+                connect();
+            }
         });
-        continue;
-      }
-      const legacyInvalid = line.match(/^r=(\d+)\s+invalid$/);
-      if (legacyInvalid) {
-        out.push({ index: Number(legacyInvalid[1]), timestamp: '', type: 'INVALID', fragments: '', value: '', kind: '' });
-      }
-    }
-    return out;
-  }
 
-  function unescapeText(value) {
-    let text = value;
-    if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
-      text = text.slice(1, -1);
-    }
-    return text.replace(/\\(\\|"|r|n|t|x[0-9A-Fa-f]{2})/g, (_, esc) => {
-      switch (esc[0]) {
-        case '\\': return '\\';
-        case '"': return '"';
-        case 'r': return '\r';
-        case 'n': return '\n';
-        case 't': return '\t';
-        case 'x': return String.fromCharCode(parseInt(esc.slice(1), 16));
-        default: return esc;
-      }
-    });
-  }
+        function handleIncoming(text) {
+            lineBuffer += text.replace(ANSI, '');
+            let idx;
+            while ((idx = lineBuffer.indexOf('\n')) >= 0) {
+                let line = lineBuffer.slice(0, idx);
+                lineBuffer = lineBuffer.slice(idx + 1);
+                if (line.endsWith('\r')) line = line.slice(0, -1);
+                processLine(line);
+            }
+        }
 
-  function escapeText(text) {
-    let out = '"';
-    for (const ch of text) {
-      const code = ch.codePointAt(0);
-      switch (ch) {
-        case '\\': out += '\\\\'; break;
-        case '"': out += '\\"'; break;
-        case '\r': out += '\\r'; break;
-        case '\n': out += '\\n'; break;
-        case '\t': out += '\\t'; break;
-        default:
-          if (code >= 0x20 && code <= 0x7e) out += ch;
-          else out += '\\x' + code.toString(16).toUpperCase().padStart(2, '0');
-      }
-    }
-    return out + '"';
-  }
+        function processLine(line) {
+            if (line.indexOf('BLACKBOX_DUMP_BEGIN') >= 0) {
+                capturing = true;
+                capturedRaw = [];
+                setCaptureState('正在捕获黑匣子日志...', '');
+                return;
+            }
+            if (!capturing) return;
+            capturedRaw.push(line);
+            if (line.indexOf('BLACKBOX_DUMP_END') >= 0) {
+                capturing = false;
+                records = parseDump(capturedRaw);
+                renderRecords(records);
+                setCaptureState('捕获完成，共 ' + records.length + ' 条记录', 'ok');
+            }
+        }
 
-  function renderRecords(list) {
-    records = list;
-    els.logBody.textContent = '';
-    if (!records.length) {
-      els.logEmpty.style.display = 'block';
-      return;
-    }
-    els.logEmpty.style.display = 'none';
-    const frag = document.createDocumentFragment();
-    for (const rec of records) {
-      const tr = document.createElement('tr');
-      const cells = [
-        { text: String(rec.index), cls: 'num' },
-        { text: rec.timestamp === '' ? '' : String(rec.timestamp), cls: 'num' },
-      ];
-      const typeTd = document.createElement('td');
-      typeTd.className = 'type';
-      const badge = document.createElement('span');
-      badge.className = 'badge ' + rec.type;
-      badge.textContent = rec.type;
-      typeTd.appendChild(badge);
-      const fragTd = document.createElement('td');
-      fragTd.className = 'num';
-      fragTd.textContent = rec.fragments === '' ? '' : String(rec.fragments);
-      const textTd = document.createElement('td');
-      textTd.className = 'text';
-      textTd.textContent = rec.value === '' ? '' : (rec.kind === 'text' ? unescapeText(rec.value) : rec.value);
-      for (const c of cells) {
-        const td = document.createElement('td');
-        td.className = c.cls;
-        td.textContent = c.text;
-        tr.appendChild(td);
-      }
-      tr.appendChild(typeTd);
-      tr.appendChild(fragTd);
-      tr.appendChild(textTd);
-      frag.appendChild(tr);
-    }
-    els.logBody.appendChild(frag);
-  }
+        function parseDump(lines) {
+            const out = [];
+            for (const line of lines) {
+                let m = line.match(/^record=(\d+)\s+timestamp_ms=(\d+)\s+type=(\w+)(?:\s+fragments=(\d+))?(?:\s+(text|payload)=(.*))?$/);
+                if (m) {
+                    out.push({
+                        index: Number(m[1]),
+                        timestamp: Number(m[2]),
+                        type: m[3],
+                        fragments: m[4] ? Number(m[4]) : '',
+                        kind: m[5] || '',
+                        value: m[6] || '',
+                    });
+                    continue;
+                }
+                m = line.match(/^record=(\d+)\s+type=INVALID$/);
+                if (m) {
+                    out.push({ index: Number(m[1]), timestamp: '', type: 'INVALID', fragments: '', kind: '', value: '' });
+                    continue;
+                }
+                m = line.match(/^r=(\d+)\s+t_ms=(\d+)\s+n=(\d+)\s+(.*)$/);
+                if (m) {
+                    out.push({ index: Number(m[1]), timestamp: Number(m[2]), type: 'STRING', fragments: Number(m[3]), kind: 'text', value: m[4] });
+                    continue;
+                }
+                m = line.match(/^r=(\d+)\s+invalid$/);
+                if (m) {
+                    out.push({ index: Number(m[1]), timestamp: '', type: 'INVALID', fragments: '', kind: '', value: '' });
+                }
+            }
+            return out;
+        }
 
-  async function sendCommand(cmd) {
-    if (!connected || !writer) {
-      setStatus('未连接串口', 'err');
-      return;
-    }
-    const ending = els.lineEnding.value.replace('\\r', '\r').replace('\\n', '\n');
-    try {
-      await writer.write(encoder.encode(cmd + ending));
-    } catch (err) {
-      setStatus('发送失败: ' + err.message, 'err');
-    }
-  }
+        function unescapeText(value) {
+            let text = value;
+            if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
+                text = text.slice(1, -1);
+            }
+            return text.replace(/\\(\\|"|r|n|t|x[0-9A-Fa-f]{2})/g, (_, esc) => {
+                switch (esc[0]) {
+                    case '\\': return '\\';
+                    case '"': return '"';
+                    case 'r': return '\r';
+                    case 'n': return '\n';
+                    case 't': return '\t';
+                    case 'x': return String.fromCharCode(parseInt(esc.slice(1), 16));
+                    default: return esc;
+                }
+            });
+        }
 
-  function download(filename, content) {
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
+        function escapeText(text) {
+            let out = '"';
+            for (const ch of text) {
+                const code = ch.codePointAt(0);
+                switch (ch) {
+                    case '\\': out += '\\\\'; break;
+                    case '"': out += '\\"'; break;
+                    case '\r': out += '\\r'; break;
+                    case '\n': out += '\\n'; break;
+                    case '\t': out += '\\t'; break;
+                    default:
+                        if (code >= 0x20 && code <= 0x7e) out += ch;
+                        else out += '\\x' + code.toString(16).toUpperCase().padStart(2, '0');
+                }
+            }
+            return out + '"';
+        }
 
-  function timestampName() {
-    const d = new Date();
-    const p = (n) => String(n).padStart(2, '0');
-    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
-  }
+        function renderRecords(list) {
+            els.logBody.textContent = '';
+            if (!list.length) {
+                els.empty.style.display = 'block';
+                return;
+            }
+            els.empty.style.display = 'none';
+            const frag = document.createDocumentFragment();
+            for (const rec of list) {
+                const tr = document.createElement('tr');
+                const idx = document.createElement('td');
+                idx.className = 'num';
+                idx.textContent = rec.index;
+                const ts = document.createElement('td');
+                ts.className = 'num';
+                ts.textContent = rec.timestamp;
+                const type = document.createElement('td');
+                const badge = document.createElement('span');
+                badge.className = 'badge ' + rec.type;
+                badge.textContent = rec.type;
+                type.appendChild(badge);
+                const fr = document.createElement('td');
+                fr.className = 'num';
+                fr.textContent = rec.fragments;
+                const text = document.createElement('td');
+                text.className = 'text';
+                text.textContent = rec.value === '' ? '' : (rec.kind === 'text' ? unescapeText(rec.value) : rec.value);
+                tr.append(idx, ts, type, fr, text);
+                frag.appendChild(tr);
+            }
+            els.logBody.appendChild(frag);
+        }
 
-  function switchView(id) {
-    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === id));
-    document.querySelectorAll('.view').forEach((v) => v.classList.toggle('active', v.id === id));
-  }
+        function writeRaw(str) {
+            if (!writer) return Promise.resolve();
+            return writer.write(str);
+        }
 
-  els.btnConnect.addEventListener('click', connect);
-  els.btnDisconnect.addEventListener('click', disconnect);
-  els.btnClearTerminal.addEventListener('click', clearTerminal);
-  els.btnSend.addEventListener('click', () => sendCommand(els.cmdInput.value));
-  els.cmdInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendCommand(els.cmdInput.value);
-  });
-  document.querySelectorAll('[data-cmd]').forEach((btn) => {
-    btn.addEventListener('click', () => sendCommand(btn.dataset.cmd));
-  });
-  document.querySelectorAll('.tab').forEach((tab) => {
-    tab.addEventListener('click', () => switchView(tab.dataset.view));
-  });
-  els.btnPullN.addEventListener('click', () => {
-    const n = Math.max(1, Number(els.pullCount.value) || 100);
-    sendCommand('blackbox dump ' + n);
-  });
-  els.btnPullAll.addEventListener('click', () => sendCommand('blackbox dump all'));
-  els.btnClearTable.addEventListener('click', () => {
-    records = [];
-    els.logBody.textContent = '';
-    els.logEmpty.style.display = 'block';
-    els.captureState.textContent = '未捕获。点击“拉取最新N条”或“拉取全部”开始。';
-    els.captureState.style.color = 'var(--muted)';
-  });
-  els.btnExportRaw.addEventListener('click', () => {
-    if (!capturedRaw.length) { setStatus('没有可导出的原始日志', 'err'); return; }
-    download('blackbox_raw_' + timestampName() + '.txt', capturedRaw.join('\n') + '\n');
-  });
-  els.btnExportParsed.addEventListener('click', () => {
-    if (!records.length) { setStatus('没有可导出的解析日志', 'err'); return; }
-    const lines = records.map((r) => {
-      const base = 'record=' + r.index + (r.timestamp === '' ? '' : ' timestamp_ms=' + r.timestamp) + ' type=' + r.type +
-        (r.fragments === '' ? '' : ' fragments=' + r.fragments);
-      if (r.type === 'INVALID' || r.value === '') return base;
-      return base + (r.kind === 'payload' ? ' payload=' + r.value : ' text=' + escapeText(unescapeText(r.value)));
-    });
-    download('blackbox_parsed_' + timestampName() + '.txt', lines.join('\n') + '\n');
-  });
+        function runCommand(cmd) {
+            sendChain = sendChain.catch(() => {}).then(async () => {
+                if (!writer) {
+                    term.writeln('\x1b[31m请先连接串口设备\x1b[0m\r\n');
+                    return;
+                }
+                await writeRaw('\r');
+                await sleep(250);
+                await writeRaw(cmd + '\r');
+                await sleep(100);
+            });
+            return sendChain;
+        }
 
-  if (!('serial' in navigator)) {
-    setStatus('当前浏览器不支持 Web Serial，请使用 Chrome/Edge。', 'err');
-    els.btnConnect.disabled = true;
-  }
-})();
-</script>
+        els.clearTermBtn.addEventListener('click', () => term.clear());
+        els.togglePanelBtn.addEventListener('click', () => {
+            const hidden = els.panel.classList.toggle('hidden');
+            els.togglePanelBtn.innerText = hidden ? '显示日志面板' : '隐藏日志面板';
+            setTimeout(() => fitAddon.fit(), 0);
+        });
+        els.btnStatus.addEventListener('click', () => runCommand('blackbox status'));
+        els.btnClearBB.addEventListener('click', () => {
+            if (confirm('确定清空设备上的黑匣子日志？')) runCommand('blackbox clear');
+        });
+        els.btnPullN.addEventListener('click', () => {
+            let n = Math.floor(Number(els.pullCount.value));
+            if (!Number.isFinite(n) || n < 1) {
+                n = 100;
+                els.pullCount.value = 100;
+            }
+            runCommand('blackbox dump ' + n);
+        });
+        els.btnPullAll.addEventListener('click', () => runCommand('blackbox dump all'));
+        els.btnMark.addEventListener('click', () => {
+            const text = els.markText.value.trim();
+            if (!text) {
+                els.markText.focus();
+                return;
+            }
+            runCommand('blackbox mark ' + text);
+            els.markText.value = '';
+        });
+        els.markText.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') els.btnMark.click();
+        });
+
+        function download(filename, content) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+
+        function stamp() {
+            const d = new Date();
+            const p = (n) => String(n).padStart(2, '0');
+            return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+        }
+
+        els.exportRawBtn.addEventListener('click', () => {
+            if (!capturedRaw.length) {
+                term.writeln('\x1b[33m没有可导出的原始日志，请先拉取。\x1b[0m\r\n');
+                return;
+            }
+            download('blackbox_raw_' + stamp() + '.txt', capturedRaw.join('\n') + '\n');
+        });
+        els.exportParsedBtn.addEventListener('click', () => {
+            if (!records.length) {
+                term.writeln('\x1b[33m没有可导出的解析日志，请先拉取。\x1b[0m\r\n');
+                return;
+            }
+            const lines = records.map((r) => {
+                const base = 'record=' + r.index + (r.timestamp === '' ? '' : ' timestamp_ms=' + r.timestamp) + ' type=' + r.type +
+                    (r.fragments === '' ? '' : ' fragments=' + r.fragments);
+                if (r.type === 'INVALID' || r.value === '') return base;
+                return base + (r.kind === 'payload' ? ' payload=' + r.value : ' text=' + escapeText(unescapeText(r.value)));
+            });
+            download('blackbox_parsed_' + stamp() + '.txt', lines.join('\n') + '\n');
+        });
+
+        if (!('serial' in navigator)) {
+            term.writeln('\x1b[31m当前浏览器不支持 Web Serial，请使用 Chrome/Edge。\x1b[0m\r\n');
+            els.connectBtn.disabled = true;
+        }
+    </script>
 </body>
+
 </html>

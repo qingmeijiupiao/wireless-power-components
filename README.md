@@ -47,9 +47,9 @@ components/
 使用方式：
 
 1. 用 Chrome 或 Edge 打开 `tools/blackbox_console.html`。Web Serial 需要安全上下文；若直接以 `file://` 打开被拦截，可在仓库根目录执行 `python -m http.server`，再访问 `http://localhost:8000/tools/blackbox_console.html`。
-2. 点击“连接串口”，选择设备串口，确认波特率（默认 `115200`）和行尾（默认 LF）。
-3. “终端”页可直接输入任意 Shell 命令，也可使用工具栏快捷按钮（版本 / 状态 / 拉取100条 / 拉取全部 / 清空黑匣子）。
-4. “黑匣子日志”页点击“拉取最新N条”或“拉取全部”，工具会发送 `blackbox dump <n|all>`，并按 `BLACKBOX_DUMP_BEGIN` / `BLACKBOX_DUMP_END` 解析成表格。
+2. 点击“连接串口设备”，选择设备串口并确认波特率（默认 `115200`）。
+3. 终端基于 xterm，可直接输入任意 Shell 命令，交互体验与设备串口命令行一致。工具自动发送命令时会先按一次回车进入设备的交互模式；进入交互模式后设备实时日志暂停，输入 `exit` 可返回日志模式。
+4. 右侧“黑匣子操作”面板：填写条数后点“拉取”，或点“拉取全部日志”，工具发送 `blackbox dump <n|all>` 并按 `BLACKBOX_DUMP_BEGIN` / `BLACKBOX_DUMP_END` 解析成表格；面板另有“状态”“清空黑匣子”“写标记”。
 5. 支持“导出原始txt”和“导出解析txt”。
 
 日志行协议见 [`components/middleware/blackbox_service/README.md`](components/middleware/blackbox_service/README.md)。
