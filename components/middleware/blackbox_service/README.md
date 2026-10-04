@@ -9,6 +9,8 @@ ESP-IDF 日志，并负责深睡前同步。
 - `ESP_LOGI` 只保留产品关键 TAG，过滤 WiFi、PHY、协议栈和 Shell 初始化噪声。
 - 所有记录均保存为字符串，不定义结构化日志协议。
 - 落盘格式为 `[I][TAG] message`、`[W][TAG] message` 或 `[E][TAG] message`。
+- 若正文以 `diagnostic_log` 的版本化标记 `@DLOG1:T@` / `@DLOG1:S@` 开头，则在落盘和
+  串口输出前都剥离该标记；黑匣子只保存业务正文，标记仅用于过滤语义。
 - 运行时消息使用 ASCII 英文，不向串口或 Flash 日志写入中文字符串。
 - 排除黑匣子内部 TAG，防止 Flash 写入日志递归捕获。
 - 每次启动由 `app_main` 调用 `app_runtime` 写入 `boot:` 记录，休眠前由
@@ -74,11 +76,28 @@ BlackboxService::sync();
 - `get_statistics()` 可读取捕获、待处理、丢弃和持久化失败计数。
 - `sync()` 仅用于导出和休眠边界，不应放入按键实时反馈路径。
 
+## 串口导出协议
+
+各固件工程的 `blackbox dump [count|all]`（`pull` 为别名）输出统一如下：
+
+```text
+BLACKBOX_DUMP_BEGIN persisted_records=<N> limit=<count|all> order=newest_first
+record=<i> timestamp_ms=<t> type=STRING fragments=<n> text="<escaped>"
+record=<i> timestamp_ms=<t> type=STRUCTURED payload=<HEX>
+record=<i> timestamp_ms=<t> type=UNKNOWN payload=<HEX>
+record=<i> type=INVALID
+BLACKBOX_DUMP_END emitted=<E> consumed_records=<C> remaining_records=<R>
+```
+
+- 记录按从新到旧顺序输出，`record` 为原始记录索引；字符串分片通过 `fragments` 指示步进长度。
+- 文本转义规则：`\\`、`\"`、`\r`、`\n`、`\t`，其余不可打印字节为 `\xNN`。
+- 上位机解析工具为 [`tools/blackbox_console.html`](../../../tools/blackbox_console.html)。
+
 ## 环境与依赖
 
 | 类别 | 要求 |
 |------|------|
 | 框架 | ESP-IDF v6.0+ |
-| 组件 | `blackbox`, `freertos`, `log` |
+| 组件 | `blackbox`, `diagnostic_log`, `freertos`, `log` |
 
 INFO 标签数组和字符串必须具有整个运行期的生命周期。无参数 `init()` 默认只收 WARN/ERROR。初始化应在启动阶段单任务执行；重复调用不会覆盖已安装配置。启动/休眠事件格式由应用定义，本文中的 boot/sleep 仅为按钮工程示例。

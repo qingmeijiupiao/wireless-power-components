@@ -38,6 +38,22 @@ components/
 
 涉及 ESP32-C3 按键设备的组件，会先核对硬件差异，并验证 ESP-NOW 协议、配对流程及持久化数据的兼容性。
 
+## 上位机工具
+
+| 工具 | 路径 | 说明 |
+| --- | --- | --- |
+| 黑匣子串口控制台 | [`tools/blackbox_console.html`](tools/blackbox_console.html) | 基于 Web Serial 的单文件网页：既可作为普通串口命令行，也能拉取黑匣子日志（最新 N 条 / 全部）并导出 txt |
+
+使用方式：
+
+1. 用 Chrome 或 Edge 打开 `tools/blackbox_console.html`。Web Serial 需要安全上下文；若直接以 `file://` 打开被拦截，可在仓库根目录执行 `python -m http.server`，再访问 `http://localhost:8000/tools/blackbox_console.html`。
+2. 点击“连接串口”，选择设备串口，确认波特率（默认 `115200`）和行尾（默认 LF）。
+3. “终端”页可直接输入任意 Shell 命令，也可使用工具栏快捷按钮（版本 / 状态 / 拉取100条 / 拉取全部 / 清空黑匣子）。
+4. “黑匣子日志”页点击“拉取最新N条”或“拉取全部”，工具会发送 `blackbox dump <n|all>`，并按 `BLACKBOX_DUMP_BEGIN` / `BLACKBOX_DUMP_END` 解析成表格。
+5. 支持“导出原始txt”和“导出解析txt”。
+
+日志行协议见 [`components/middleware/blackbox_service/README.md`](components/middleware/blackbox_service/README.md)。
+
 ## 开源协议
 
 本仓库采用 [MIT 协议](LICENSE)。
