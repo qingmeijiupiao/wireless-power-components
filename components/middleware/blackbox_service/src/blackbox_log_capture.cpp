@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "diagnostic_log.h"
 #include "esp_log_write.h"
 #include "freertos/FreeRTOS.h"
 
@@ -24,6 +25,7 @@ vprintf_like_t previous_log_vprintf;
 bool capture_busy;
 char capture_line[LOG_LINE_BUFFER_SIZE];
 char clean_line[LOG_LINE_BUFFER_SIZE];
+char output_line[LOG_LINE_BUFFER_SIZE];
 LogEvent capture_event;
 Config capture_config;
 
@@ -101,6 +103,16 @@ bool format_log_event(const char* raw, LogEvent* event) {
     }
     message += 2;
 
+    // 剥离 diagnostic_log 的版本化标记，黑匣子只保存业务正文。
+    // 标记仅用于业务组件与日志钩子之间的语义约定，不属于日志内容。
+    constexpr size_t TEXT_MARKER_LENGTH     = sizeof(DIAGNOSTIC_LOG_TEXT_MARKER) - 1;
+    constexpr size_t SNAPSHOT_MARKER_LENGTH = sizeof(DIAGNOSTIC_LOG_SNAPSHOT_MARKER) - 1;
+    if (strncmp(message, DIAGNOSTIC_LOG_TEXT_MARKER, TEXT_MARKER_LENGTH) == 0) {
+        message += TEXT_MARKER_LENGTH;
+    } else if (strncmp(message, DIAGNOSTIC_LOG_SNAPSHOT_MARKER, SNAPSHOT_MARKER_LENGTH) == 0) {
+        message += SNAPSHOT_MARKER_LENGTH;
+    }
+
     size_t message_length = strlen(message);
     while (message_length > 0 &&
            (message[message_length - 1] == '\r' ||
@@ -132,19 +144,58 @@ void push_log_event(const LogEvent& event) {
     portEXIT_CRITICAL(&event_ring_lock);
 }
 
-int blackbox_log_vprintf(const char* format, va_list args) {
-    int output_length = 0;
-    if (previous_log_vprintf != nullptr) {
-        va_list output_args;
-        va_copy(output_args, args);
-        output_length = previous_log_vprintf(format, output_args);
-        va_end(output_args);
+// 去掉日志正文中的过滤标识符，返回是否实际命中标记。
+bool remove_marker_from_output(const char* raw, char* output, size_t output_size) {
+    const char* marker = DIAGNOSTIC_LOG_TEXT_MARKER;
+    const char* marker_pos = strstr(raw, marker);
+    if (marker_pos == nullptr) {
+        marker = DIAGNOSTIC_LOG_SNAPSHOT_MARKER;
+        marker_pos = strstr(raw, marker);
     }
+    if (marker_pos == nullptr) {
+        return false;
+    }
+    const size_t prefix_length = static_cast<size_t>(marker_pos - raw);
+    if (prefix_length >= output_size) {
+        return false;
+    }
+    memcpy(output, raw, prefix_length);
+    snprintf(output + prefix_length, output_size - prefix_length, "%s", marker_pos + strlen(marker));
+    return true;
+}
 
+int forward_original(const char* format, va_list args) {
+    if (previous_log_vprintf == nullptr) {
+        return 0;
+    }
+    va_list output_args;
+    va_copy(output_args, args);
+    const int output_length = previous_log_vprintf(format, output_args);
+    va_end(output_args);
+    return output_length;
+}
+
+// 变参转发：把单个字符串参数包装成 previous_log_vprintf 需要的 va_list。
+int forward_formatted(vprintf_like_t output, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    const int output_length = output(format, args);
+    va_end(args);
+    return output_length;
+}
+
+int output_clean_line(const char* line) {
+    if (previous_log_vprintf == nullptr) {
+        return 0;
+    }
+    return forward_formatted(previous_log_vprintf, "%s", line);
+}
+
+int blackbox_log_vprintf(const char* format, va_list args) {
     // ESP 日志 Hook 可能被不同任务并发调用。捕获区使用固定静态缓冲，重入时
     // 保留原串口输出但跳过持久化，避免破坏正在格式化的记录。
     if (__atomic_test_and_set(&capture_busy, __ATOMIC_ACQUIRE)) {
-        return output_length;
+        return forward_original(format, args);
     }
 
     va_list capture_args;
@@ -153,12 +204,23 @@ int blackbox_log_vprintf(const char* format, va_list args) {
         vsnprintf(capture_line, sizeof(capture_line), format, capture_args);
     va_end(capture_args);
 
+    int output_length = 0;
     if (captured_length > 0) {
+        // 命中标记时重写串口行，去掉仅供黑匣子过滤使用的标识符。
+        if (remove_marker_from_output(capture_line, output_line, sizeof(output_line))) {
+            output_length = output_clean_line(output_line);
+        } else {
+            output_length = forward_original(format, args);
+        }
+
         capture_event = {};
         if (format_log_event(capture_line, &capture_event)) {
             push_log_event(capture_event);
         }
+    } else {
+        output_length = forward_original(format, args);
     }
+
     __atomic_clear(&capture_busy, __ATOMIC_RELEASE);
     return output_length;
 }

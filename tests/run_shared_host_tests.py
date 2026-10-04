@@ -39,6 +39,8 @@ inline vprintf_like_t esp_log_set_vprintf(vprintf_like_t hook) {
     auto old=test_log_hook; test_log_hook=hook; return old;
 }
 ''',
+    'esp_log.h': '''#pragma once
+''',
 }
 
 LOG_TEST = r'''
@@ -73,6 +75,9 @@ int main(int argc, char**) {
     log_line("\x1b[31mE (13) Other: error\x1b[0m\n");
     log_line("E (14) Blackbox: recursive\n");
     log_line("I (15) Blackbox: recursive info\n");
+    // diagnostic_log markers must be parsed and stripped from persisted text.
+    log_line("I (16) Chosen: @DLOG1:T@ tagged\n");
+    log_line("W (17) Other: @DLOG1:S@ warned\n");
     Internal::LogEvent event{};
     if (configured) {
         assert(Internal::pop_log_event(&event));
@@ -82,9 +87,15 @@ int main(int argc, char**) {
     assert(!strcmp(event.text,"[W][Other] warning"));
     assert(Internal::pop_log_event(&event));
     assert(!strcmp(event.text,"[E][Other] error"));
+    if (configured) {
+        assert(Internal::pop_log_event(&event));
+        assert(!strcmp(event.text,"[I][Chosen] tagged"));
+    }
+    assert(Internal::pop_log_event(&event));
+    assert(!strcmp(event.text,"[W][Other] warned"));
     assert(!Internal::pop_log_event(&event));
     Statistics stats{}; get_statistics(&stats);
-    assert(stats.captured_logs==(configured ? 3u : 2u));
+    assert(stats.captured_logs==(configured ? 5u : 3u));
     assert(stats.dropped_logs==0 && stats.pending_logs==0);
 }
 '''
@@ -140,8 +151,9 @@ def main():
             f=work/name; f.parent.mkdir(parents=True,exist_ok=True); f.write_text(text)
         log=ROOT/'components/middleware/blackbox_service'
         proto=ROOT/'components/product/espnow_service_proto'
+        diagnostic=ROOT/'components/common/diagnostic_log'
         suites=[('log', LOG_TEST, [log/'src/blackbox_service.cpp',log/'src/blackbox_log_capture.cpp'],
-                 [log/'include',log/'private_include']),
+                 [log/'include',log/'private_include',diagnostic/'include']),
                 ('wire',WIRE_TEST,[proto/'src/espnow_service_proto.cpp'],
                  [proto/'include',ROOT/'components/middleware/espnow_link/include'])]
         for name, source, sources, includes in suites:

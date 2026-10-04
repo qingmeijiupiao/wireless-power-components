@@ -5,5 +5,5 @@ idf_component_register(
         "src/blackbox_worker.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "private_include"
-    REQUIRES blackbox freertos log
+    REQUIRES blackbox diagnostic_log freertos log
 )
