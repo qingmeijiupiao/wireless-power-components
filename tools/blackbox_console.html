@@ -152,7 +152,7 @@
                 <div id="tableWrap">
                     <table>
                         <thead>
-                            <tr><th>#</th><th>时间戳(ms)</th><th>类型</th><th>分片</th><th>内容</th></tr>
+                            <tr><th>开机</th><th>#</th><th>时间戳(ms)</th><th>类型</th><th>分片</th><th>内容</th></tr>
                         </thead>
                         <tbody id="logBody"></tbody>
                     </table>
@@ -348,8 +348,9 @@
             if (line.indexOf('BLACKBOX_DUMP_END') >= 0) {
                 capturing = false;
                 records = parseDump(capturedRaw);
+                const boots = assignBoots(records);
                 renderRecords(records);
-                setCaptureState('捕获完成，共 ' + records.length + ' 条记录', 'ok');
+                setCaptureState('捕获完成，共 ' + records.length + ' 条记录，' + boots + ' 次开机', 'ok');
             }
         }
 
@@ -422,6 +423,27 @@
             return out + '"';
         }
 
+        // 导出顺序为新到旧；按时间顺序扫描，时间戳一旦下降即代表设备重新开机
+        // （uptime 归零），据此派生出开机序号，无需固件额外记录 boot id。
+        function assignBoots(list) {
+            let boot = 1;
+            let previous = null;
+            for (let i = list.length - 1; i >= 0; --i) {
+                const raw = list[i].timestamp;
+                if (raw === '' || raw === null || raw === undefined) {
+                    list[i].boot = boot;
+                    continue;
+                }
+                const value = Number(raw);
+                if (previous !== null && value < previous) {
+                    boot++;
+                }
+                previous = value;
+                list[i].boot = boot;
+            }
+            return boot;
+        }
+
         function renderRecords(list) {
             els.logBody.textContent = '';
             if (!list.length) {
@@ -432,6 +454,9 @@
             const frag = document.createDocumentFragment();
             for (const rec of list) {
                 const tr = document.createElement('tr');
+                const boot = document.createElement('td');
+                boot.className = 'num';
+                boot.textContent = rec.boot;
                 const idx = document.createElement('td');
                 idx.className = 'num';
                 idx.textContent = rec.index;
@@ -449,7 +474,7 @@
                 const text = document.createElement('td');
                 text.className = 'text';
                 text.textContent = rec.value === '' ? '' : (rec.kind === 'text' ? unescapeText(rec.value) : rec.value);
-                tr.append(idx, ts, type, fr, text);
+                tr.append(boot, idx, ts, type, fr, text);
                 frag.appendChild(tr);
             }
             els.logBody.appendChild(frag);
