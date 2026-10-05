@@ -10,7 +10,6 @@
 #include <cstdio>
 
 #include "battery_level.h"
-#include "blackbox_service.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -45,6 +44,8 @@ bool* pending_switch_output_out;
 // 两类事件必须分别等待：链路 ACK 只确认送达，业务响应才确认设备处理结果。
 uint32_t pending_switch_id;
 uint32_t pending_data_id;
+EspNowLink::MacAddress pending_switch_peer = {};
+EspNowLink::MacAddress pending_data_peer = {};
 int64_t pending_switch_started_us;
 int64_t pending_data_started_us;
 EspNowLink::SendResult switch_transport_result = EspNowLink::SendResult::SUBMIT_FAILED;
@@ -107,7 +108,7 @@ void send_battery_after_control(const EspNowLink::MacAddress& peer) {
  */
 void switch_transport_complete(EspNowLink::SendResult result, uint32_t sequence, void*) {
     switch_transport_result = result;
-    printf("[switch-transport] sequence=%lu result=%u elapsed_ms=%lld\n",
+    ESP_LOGI(TAG, "[switch-transport] sequence=%lu result=%u elapsed_ms=%lld\n",
            static_cast<unsigned long>(sequence), static_cast<unsigned>(result),
            static_cast<long long>((esp_timer_get_time() - pending_switch_started_us) / 1000));
     xEventGroupSetBits(response_events, SWITCH_TRANSPORT_BIT);
@@ -116,7 +117,7 @@ void switch_transport_complete(EspNowLink::SendResult result, uint32_t sequence,
 /** @brief 数据请求的链路可靠发送完成回调，执行上下文同 switch_transport_complete。 */
 void data_transport_complete(EspNowLink::SendResult result, uint32_t sequence, void*) {
     data_transport_result = result;
-    printf("[data-transport] sequence=%lu result=%u elapsed_ms=%lld\n",
+    ESP_LOGI(TAG, "[data-transport] sequence=%lu result=%u elapsed_ms=%lld\n",
            static_cast<unsigned long>(sequence), static_cast<unsigned>(result),
            static_cast<long long>((esp_timer_get_time() - pending_data_started_us) / 1000));
     xEventGroupSetBits(response_events, DATA_TRANSPORT_BIT);
@@ -133,16 +134,10 @@ void switch_response(const EspNowLink::MacAddress& source,
                      bool output_on,
                      void*) {
     const int64_t elapsed_ms = (esp_timer_get_time() - pending_switch_started_us) / 1000;
-    const bool pending = request_id == pending_switch_id;
-    printf(pending ? "[switch-rsp] peer=" : "[switch-rsp-late] peer=");
-    print_mac(source);
-    printf(" request_id=%lu action=%s result=%s output=%u delay_ms=%lld\n",
-           static_cast<unsigned long>(request_id), action_name(action), result_name(result),
-           output_on ? 1U : 0U, static_cast<long long>(elapsed_ms));
-    BlackboxService::append_event("remote: switch id=%lu action=%s result=%s state=%u delay=%lld",
-                                  static_cast<unsigned long>(request_id), action_name(action),
-                                  result_name(result), output_on ? 1U : 0U,
-                                  static_cast<long long>(elapsed_ms));
+    const bool pending = request_id == pending_switch_id && source == pending_switch_peer;
+    ESP_LOGI(TAG, "switch response id=%lu pending=%u action=%s result=%s output=%u delay_ms=%lld",
+             static_cast<unsigned long>(request_id), pending, action_name(action), result_name(result),
+             output_on, static_cast<long long>(elapsed_ms));
     if (pending) {
         if (pending_switch_result_out != nullptr) {
             *pending_switch_result_out = result;
@@ -165,24 +160,13 @@ void data_response(const EspNowLink::MacAddress& source,
                    bool periodic,
                    void*) {
     const int64_t elapsed_ms = (esp_timer_get_time() - pending_data_started_us) / 1000;
-    const bool pending = !periodic && request_id == pending_data_id;
-    printf(periodic ? "[data-periodic] peer=" :
-           pending ? "[data-rsp] peer=" : "[data-rsp-late] peer=");
-    print_mac(source);
-    printf(" request_id=%lu available=%u periodic=%u delay_ms=%lld\n",
-           static_cast<unsigned long>(request_id), available ? 1U : 0U,
-           periodic ? 1U : 0U, static_cast<long long>(elapsed_ms));
+    const bool pending = !periodic && request_id == pending_data_id && source == pending_data_peer;
+    ESP_LOGI(TAG, "data response id=%lu available=%u periodic=%u pending=%u delay_ms=%lld",
+             static_cast<unsigned long>(request_id), available, periodic, pending,
+             static_cast<long long>(elapsed_ms));
     if (available) {
-        printf("  voltage=%u mV current=%ld uA board_temp=%.2f C chip_temp=%.2f C\n",
-               data.voltage_mv, static_cast<long>(data.current_ua),
-               data.board_temperature_centi_c / 100.0,
-               data.chip_temperature_centi_c / 100.0);
-        printf("  charge=%lld uAh energy=%lld uWh meter_time=%llu ms output=%u flags=0x%02X\n",
-               static_cast<long long>(data.charge_uah),
-               static_cast<long long>(data.energy_uwh),
-               static_cast<unsigned long long>(data.meter_time_ms),
-               (data.status_flags & EspNowService::DEVICE_STATUS_OUTPUT_ON) ? 1U : 0U,
-               data.status_flags);
+        ESP_LOGI(TAG, "data voltage_mv=%u current_ua=%ld output=%u", data.voltage_mv,
+                 static_cast<long>(data.current_ua), (data.status_flags & EspNowService::DEVICE_STATUS_OUTPUT_ON) != 0);
     }
     if (pending) {
         xEventGroupSetBits(response_events, DATA_RESPONSE_BIT);
@@ -205,9 +189,9 @@ esp_err_t ensure_peer_channel(const EspNowLink::MacAddress& peer) {
     const esp_err_t ret = EspNowLink::recover_peer_channel(peer);
     if (ret == ESP_ERR_INVALID_STATE && EspNowLink::is_recovering_channel()) {
         // 已有恢复在途，等待它结束即可，避免把并发误判为失败。
-        printf("[channel-check] join=in_flight\n");
+        ESP_LOGI(TAG, "[channel-check] join=in_flight\n");
     } else if (ret != ESP_OK) {
-        printf("[channel-check] submit=%s\n", esp_err_to_name(ret));
+        ESP_LOGI(TAG, "[channel-check] submit=%s\n", esp_err_to_name(ret));
         xSemaphoreGive(channel_check_mutex);
         return ret;
     }
@@ -216,7 +200,7 @@ esp_err_t ensure_peer_channel(const EspNowLink::MacAddress& peer) {
         vTaskDelay(pdMS_TO_TICKS(2));
     }
     const esp_err_t result = EspNowLink::get_channel_recovery_result();
-    printf("[channel-check] result=%s probe_timeout_ms=%u elapsed_ms=%lld\n",
+    ESP_LOGI(TAG, "[channel-check] result=%s probe_timeout_ms=%u elapsed_ms=%lld\n",
            esp_err_to_name(result), timeout_ms,
            static_cast<long long>((esp_timer_get_time() - started_us) / 1000));
     xSemaphoreGive(channel_check_mutex);
@@ -236,6 +220,8 @@ esp_err_t init() {
     }
     ESP_RETURN_ON_ERROR(WiFiManager::instance().init(), TAG, "WiFi init failed");
     ESP_RETURN_ON_ERROR(EspNowService::init(), TAG, "business service init failed");
+    ESP_RETURN_ON_ERROR(EspNowLink::configure_pairing(EspNowService::pairing_config(EspNowService::PairingRole::BUTTON)),
+                        TAG, "pairing policy failed");
     EspNowService::set_switch_response_handler(switch_response);
     EspNowService::set_data_received_handler(data_response);
     return WiFiManager::instance().start_sta_radio(1);
@@ -246,9 +232,10 @@ esp_err_t send_switch(EspNowService::SwitchAction action,
                       bool check_channel,
                       EspNowService::SwitchResult* out_result,
                       bool* out_output) {
+    if (EspNowLink::is_pairing()) { return ESP_ERR_INVALID_STATE; }
     EspNowLink::MacAddress peer = {};
     if (!controller_peer(&peer)) {
-        printf("[switch] no paired controller; run 'espnow pair'\n");
+        ESP_LOGI(TAG, "[switch] no paired controller; run 'espnow pair'\n");
         return ESP_ERR_NOT_FOUND;
     }
     if (check_channel) {
@@ -260,14 +247,13 @@ esp_err_t send_switch(EspNowService::SwitchAction action,
 
     xEventGroupClearBits(response_events, SWITCH_RESPONSE_BIT | SWITCH_TRANSPORT_BIT);
     pending_switch_id = 0;
+    pending_switch_peer = peer;
     switch_transport_result = EspNowLink::SendResult::SUBMIT_FAILED;
     pending_switch_started_us = esp_timer_get_time();
     const esp_err_t ret = EspNowService::send_switch_request(
         peer, action, &pending_switch_id, switch_transport_complete, nullptr);
-    printf("[switch-tx] peer=");
-    print_mac(peer);
-    printf(" action=%s request_id=%lu submit=%s\n", action_name(action),
-           static_cast<unsigned long>(pending_switch_id), esp_err_to_name(ret));
+    ESP_LOGI(TAG, "switch tx action=%s id=%lu submit=%s", action_name(action),
+             static_cast<unsigned long>(pending_switch_id), esp_err_to_name(ret));
     if (ret != ESP_OK) {
         pending_switch_result_out = nullptr;
         pending_switch_output_out = nullptr;
@@ -310,9 +296,10 @@ esp_err_t send_switch(EspNowService::SwitchAction action,
 }
 
 esp_err_t read_data(bool check_channel) {
+    if (EspNowLink::is_pairing()) { return ESP_ERR_INVALID_STATE; }
     EspNowLink::MacAddress peer = {};
     if (!controller_peer(&peer)) {
-        printf("[read] no paired controller\n");
+        ESP_LOGI(TAG, "[read] no paired controller\n");
         return ESP_ERR_NOT_FOUND;
     }
     if (check_channel) {
@@ -321,14 +308,12 @@ esp_err_t read_data(bool check_channel) {
 
     xEventGroupClearBits(response_events, DATA_RESPONSE_BIT | DATA_TRANSPORT_BIT);
     pending_data_id = 0;
+    pending_data_peer = peer;
     data_transport_result = EspNowLink::SendResult::SUBMIT_FAILED;
     pending_data_started_us = esp_timer_get_time();
     const esp_err_t ret = EspNowService::request_device_data(
         peer, &pending_data_id, data_transport_complete, nullptr);
-    printf("[data-tx] peer=");
-    print_mac(peer);
-    printf(" request_id=%lu submit=%s\n",
-           static_cast<unsigned long>(pending_data_id), esp_err_to_name(ret));
+    ESP_LOGI(TAG, "data tx id=%lu submit=%s", static_cast<unsigned long>(pending_data_id), esp_err_to_name(ret));
     if (ret != ESP_OK) {
         return ret;
     }
@@ -355,18 +340,11 @@ esp_err_t read_data(bool check_channel) {
 }
 
 esp_err_t start_pairing(bool clear_first) {
-    if (clear_first) {
-        const esp_err_t clear_ret = EspNowLink::clear_saved_peers();
-        printf("[pair] clear peers: %s\n", esp_err_to_name(clear_ret));
-        if (clear_ret != ESP_OK) {
-            return clear_ret;
-        }
-    }
+    // 保留兼容参数；重配也保留旧绑定，成功后由 Link 原子替换。
+    (void)clear_first;
     const esp_err_t ret = EspNowLink::start_pairing();
-    printf("[pair] scan submitted=%s; saved channel first, then allowed channels\n",
+    ESP_LOGI(TAG, "[pair] scan submitted=%s; bounded scan with saved channel first\n",
            esp_err_to_name(ret));
-    BlackboxService::append_event("remote: pairing start clear=%u result=%s",
-                                  clear_first ? 1U : 0U, esp_err_to_name(ret));
     return ret;
 }
 
@@ -420,7 +398,7 @@ esp_err_t recover_channel() {
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     WiFiManager::instance().get_channel(&current, &second);
     uint8_t forced = current == 13 ? 1 : current + 1;
-    printf("[recover] force-channel original=%u candidate=%u\n", current, forced);
+    ESP_LOGI(TAG, "[recover] force-channel original=%u candidate=%u\n", current, forced);
 
     // 先主动切换到无法通信的信道，确保后续确实覆盖扫描恢复路径。
     esp_err_t probe = ESP_OK;
@@ -437,6 +415,7 @@ esp_err_t recover_channel() {
         return ESP_FAIL;
     }
 
+    if (EspNowLink::is_pairing()) { return ESP_ERR_INVALID_STATE; }
     EspNowLink::MacAddress peer = {};
     if (!controller_peer(&peer)) {
         set_channel(current);
@@ -463,17 +442,17 @@ esp_err_t run_test(int count) {
     int failures = 0;
     const int64_t started_us = esp_timer_get_time();
     for (int i = 0; i < count; ++i) {
-        printf("[test] round=%d/%d phase=toggle\n", i + 1, count);
+        ESP_LOGI(TAG, "[test] round=%d/%d phase=toggle\n", i + 1, count);
         if (send_switch(EspNowService::SwitchAction::TOGGLE) != ESP_OK) {
             ++failures;
         }
         vTaskDelay(pdMS_TO_TICKS(300));
-        printf("[test] round=%d/%d phase=read\n", i + 1, count);
+        ESP_LOGI(TAG, "[test] round=%d/%d phase=read\n", i + 1, count);
         if (read_data() != ESP_OK) {
             ++failures;
         }
     }
-    printf("[test] complete rounds=%d failures=%d elapsed_ms=%lld\n",
+    ESP_LOGI(TAG, "[test] complete rounds=%d failures=%d elapsed_ms=%lld\n",
            count, failures,
            static_cast<long long>((esp_timer_get_time() - started_us) / 1000));
     return failures == 0 ? ESP_OK : ESP_FAIL;

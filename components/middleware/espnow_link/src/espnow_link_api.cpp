@@ -1,4 +1,5 @@
 #include "espnow_link.h"
+#include "esp_attr.h"
 
 #include <algorithm>
 #include <cstring>
@@ -9,9 +10,30 @@
 
 namespace EspNowLink {
 
+namespace {
+portMUX_TYPE cancellation_lock = portMUX_INITIALIZER_UNLOCKED;
+}
+uint32_t IRAM_ATTR Internal::get_transmission_generation() {
+    portENTER_CRITICAL(&cancellation_lock);
+    const uint32_t value = transmission_generation;
+    portEXIT_CRITICAL(&cancellation_lock);
+    return value;
+}
+void cancel_transmissions() {
+    portENTER_CRITICAL(&cancellation_lock);
+    ++Internal::transmission_generation;
+    portEXIT_CRITICAL(&cancellation_lock);
+}
+void IRAM_ATTR cancel_transmissions_from_isr() {
+    portENTER_CRITICAL_ISR(&cancellation_lock);
+    ++Internal::transmission_generation;
+    portEXIT_CRITICAL_ISR(&cancellation_lock);
+}
+
 esp_err_t add_peer(const PeerConfig& config) {
     using namespace Internal;
-    if (config.address.is_broadcast()) {
+    LifecycleGuard guard;
+    if (config.address.is_broadcast() || config.channel > 14) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -30,16 +52,7 @@ esp_err_t add_peer(const PeerConfig& config) {
         return ESP_ERR_NO_MEM;
     }
 
-    entry->used   = true;
-    entry->config = config;
-    if (entry->metrics.ack_timeout_ms == 0) {
-        entry->metrics.ack_timeout_ms = DEFAULT_ACK_TIMEOUT_MS;
-    }
     portEXIT_CRITICAL(&state_lock);
-
-    if (!active) {
-        return ESP_OK;
-    }
 
     // peer.channel=0 表示始终跟随当前 STA/AP 工作信道。
     esp_now_peer_info_t info = {};
@@ -48,11 +61,29 @@ esp_err_t add_peer(const PeerConfig& config) {
     info.channel = 0;
     info.ifidx   = WIFI_IF_STA;
     info.encrypt = config.encrypted;
-    return esp_now_is_peer_exist(config.address.bytes) ? esp_now_mod_peer(&info) : esp_now_add_peer(&info);
+    const esp_err_t error = active ? (esp_now_is_peer_exist(config.address.bytes) ?
+        esp_now_mod_peer(&info) : esp_now_add_peer(&info)) : ESP_OK;
+    if (error != ESP_OK) {
+        return error;
+    }
+    portENTER_CRITICAL(&state_lock);
+    const bool changed_key = entry->used &&
+        (entry->config.encrypted != config.encrypted || memcmp(entry->config.lmk, config.lmk, KEY_SIZE) != 0);
+    entry->used = true;
+    entry->config = config;
+    if (changed_key) {
+        entry->has_rx_sequence = false;
+    }
+    if (entry->metrics.ack_timeout_ms == 0) {
+        entry->metrics.ack_timeout_ms = DEFAULT_ACK_TIMEOUT_MS;
+    }
+    portEXIT_CRITICAL(&state_lock);
+    return ESP_OK;
 }
 
 esp_err_t remove_peer(const MacAddress& address) {
     using namespace Internal;
+    LifecycleGuard guard;
     portENTER_CRITICAL(&state_lock);
     PeerEntry* peer = find_peer(address);
     if (peer == nullptr) {
@@ -78,6 +109,7 @@ bool has_peer(const MacAddress& address) {
 esp_err_t send(const MacAddress& destination, uint16_t message_id, const void* payload, size_t payload_size,
                const SendOptions& options, SendCallback callback, void* context) {
     using namespace Internal;
+    LifecycleGuard guard;
     if (!initialized || !active) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -86,6 +118,7 @@ esp_err_t send(const MacAddress& destination, uint16_t message_id, const void* p
     }
 
     SendRequest request  = {};
+    request.generation = get_transmission_generation();
     request.destination  = destination;
     request.message_id   = message_id;
     request.payload_size = static_cast<uint16_t>(payload_size);

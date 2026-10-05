@@ -5,7 +5,6 @@
 
 #include "esp_check.h"
 #include "esp_log.h"
-#include "diagnostic_log.h"
 #include "esp_now.h"
 #include "esp_random.h"
 #include "espnow_link_internal.h"
@@ -33,8 +32,9 @@ namespace Internal {
 
 static constexpr char TAG[] = "EspNowLink";
 
-bool                initialized              = false;
-bool                active                   = false;
+std::atomic_bool    initialized              = false;
+std::atomic_bool    active                   = false;
+SemaphoreHandle_t   lifecycle_mutex          = nullptr;
 QueueHandle_t       rx_queue                 = nullptr;
 QueueHandle_t       tx_queue                 = nullptr;
 QueueHandle_t       mac_queue                = nullptr;
@@ -45,6 +45,7 @@ PeerEntry           peers[MAX_PEERS]         = {};
 PendingTransmission pending                  = {};
 SendOptions         default_reliable_options = {};
 LinkStatistics      statistics               = {};
+uint32_t            transmission_generation = 1;
 uint32_t            next_sequence            = 1;
 uint32_t            local_session_id         = 1;
 portMUX_TYPE        statistics_lock          = portMUX_INITIALIZER_UNLOCKED;
@@ -100,6 +101,7 @@ static void send_callback(const esp_now_send_info_t* info, esp_now_send_status_t
 }
 
 esp_err_t activate() {
+    LifecycleGuard guard;
     if (!initialized || active) {
         return initialized ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
@@ -144,21 +146,24 @@ esp_err_t activate() {
     }
 
     active = true;
-    DEVICE_STATE_I(TAG, "espnow: link old=inactive new=active result=ok");
+    ESP_LOGI(TAG, "link activated");
     return ESP_OK;
 }
 
 void deactivate() {
+    LifecycleGuard guard;
     if (!active) {
         return;
     }
+    // 与 Link 任务共同持有递归互斥锁，避免暂停一个正在持有其他锁的任务。
+    active = false;
+    cancel_transmissions();
     // 必须在 esp_wifi_stop() 前解除回调并反初始化，防止驱动重启后状态残留。
     esp_now_unregister_recv_cb();
     esp_now_unregister_send_cb();
     esp_now_deinit();
-    active  = false;
-    pending = {};
-    DEVICE_STATE_I(TAG, "espnow: link old=active new=inactive result=ok");
+    reset_transmit_state();
+    ESP_LOGI(TAG, "link deactivated");
 }
 
 static void radio_event_handler(WiFiManager::RadioEvent event, void*) {
@@ -181,11 +186,12 @@ esp_err_t init() {
     }
 
     // 所有队列使用固定元素大小，运行期不为单个收发包动态分配内存。
+    lifecycle_mutex = xSemaphoreCreateRecursiveMutex();
     rx_queue  = xQueueCreate(RX_QUEUE_LENGTH, sizeof(RxEvent));
     tx_queue  = xQueueCreate(TX_QUEUE_LENGTH, sizeof(SendRequest));
     mac_queue = xQueueCreate(MAC_QUEUE_LENGTH, sizeof(MacResultEvent));
     ack_queue = xQueueCreate(ACK_QUEUE_LENGTH, sizeof(AckRequest));
-    if (rx_queue == nullptr || tx_queue == nullptr || mac_queue == nullptr || ack_queue == nullptr) {
+    if (lifecycle_mutex == nullptr || rx_queue == nullptr || tx_queue == nullptr || mac_queue == nullptr || ack_queue == nullptr) {
         deinit();
         return ESP_ERR_NO_MEM;
     }
@@ -217,15 +223,39 @@ esp_err_t init() {
     if (ret == ESP_OK) {
         ret = init_pairing();
     }
+    if (ret != ESP_OK) {
+        deinit();
+    }
     return ret;
 }
 
 esp_err_t deinit() {
     using namespace Internal;
+    if (task_handle != nullptr && task_handle == xTaskGetCurrentTaskHandle()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    deinit_pairing();
     if (initialized) {
         WiFiManager::instance().unregister_radio_listener(radio_event_handler, nullptr);
     }
     deactivate();
+    // 射频关闭后，不再接受新请求；限时等待 Link 任务交付所有取消回调，避免异常时永久挂起。
+    if (task_handle != nullptr && tx_queue != nullptr) {
+        const TickType_t drain_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(200);
+        while (true) {
+            bool drained = false;
+            {
+                LifecycleGuard guard;
+                drained = !pending.active && uxQueueMessagesWaiting(tx_queue) == 0;
+            }
+            if (drained) { break; }
+            if (static_cast<int32_t>(xTaskGetTickCount() - drain_deadline) >= 0) {
+                ESP_LOGW(TAG, "deinit drain timeout");
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
     if (task_handle != nullptr) {
         vTaskDelete(task_handle);
         task_handle = nullptr;
@@ -246,6 +276,12 @@ esp_err_t deinit() {
         vQueueDelete(ack_queue);
         ack_queue = nullptr;
     }
+    if (lifecycle_mutex != nullptr) {
+        vSemaphoreDelete(lifecycle_mutex);
+        lifecycle_mutex = nullptr;
+    }
+    for (auto& handler : handlers) { handler = {}; }
+    for (auto& peer : peers) { peer = {}; }
     initialized = false;
     return ESP_OK;
 }

@@ -3,7 +3,6 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES
         battery_level
-        blackbox_service
         espnow_link
         espnow_service_remote
         wifi_manager

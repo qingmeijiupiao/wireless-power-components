@@ -9,6 +9,6 @@ idf_component_register(
         "src/espnow_peer_store.cpp"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS "private_include"
-    REQUIRES diagnostic_log esp_wifi wifi_manager HXC_NVS
+    REQUIRES esp_wifi wifi_manager HXC_NVS
     PRIV_REQUIRES freertos log
 )

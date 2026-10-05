@@ -14,7 +14,7 @@ CXX = os.environ.get('CXX', 'g++')
 STUBS = {
     'esp_err.h': '''#pragma once
 using esp_err_t = int;
-constexpr int ESP_OK=0, ESP_ERR_INVALID_ARG=0x102;
+constexpr int ESP_OK=0, ESP_ERR_INVALID_ARG=0x102, ESP_ERR_INVALID_STATE=0x103;
 ''',
     'blackbox.h': '''#pragma once
 #include <cstddef>
@@ -145,7 +145,7 @@ int main() {
 '''
 
 def main():
-    with tempfile.TemporaryDirectory(prefix='wireless-shared-tests-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='wireless-shared-tests-', dir=ROOT/'tests') as tmp:
         work=Path(tmp)
         for name, text in STUBS.items():
             f=work/name; f.parent.mkdir(parents=True,exist_ok=True); f.write_text(text)

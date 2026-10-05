@@ -1,4 +1,5 @@
 #include "espnow_pairing_internal.h"
+#include "espnow_link_internal.h"
 
 #include <cstring>
 
@@ -36,6 +37,7 @@ uint32_t calculate_checksum(const PeerStore& store) {
 }
 
 PeerStore load_store() {
+    LifecycleGuard guard;
     PeerStore store = stored_peers.read();
     // 长度匹配不代表内容有效，magic、版本、计数和校验任一失败都恢复空表。
     if (!valid_store(store)) {
@@ -48,8 +50,13 @@ PeerStore load_store() {
     return store;
 }
 
-esp_err_t save_peer(const EspNowLink::PeerConfig& peer, uint8_t channel) {
+esp_err_t save_peer(const EspNowLink::PeerConfig& peer, uint8_t channel, uint8_t role, bool replace) {
+    LifecycleGuard guard;
     PeerStore   store = load_store();
+    const PeerStore old = store;
+    if (replace) {
+        store = default_store();
+    }
     StoredPeer* slot  = nullptr;
     // 优先更新相同 MAC；不存在时复用第一个空槽，保持固定表可增删。
     for (auto& candidate : store.peers) {
@@ -69,15 +76,47 @@ esp_err_t save_peer(const EspNowLink::PeerConfig& peer, uint8_t channel) {
     }
     *slot      = {};
     slot->used = 1;
+    slot->reserved_role = role;
     memcpy(slot->mac, peer.address.bytes, sizeof(slot->mac));
     memcpy(slot->lmk, peer.lmk, sizeof(slot->lmk));
     slot->last_channel = channel;
     store.checksum     = calculate_checksum(store);
     // HXC_NVS 以完整 blob 原子更新缓存和 Flash，不为每个 peer 动态创建 key。
-    return stored_peers.set(store);
+    const esp_err_t error = stored_peers.set(store);
+    if (error == ESP_OK && replace) {
+        for (const auto& previous : old.peers) {
+            MacAddress address = {};
+            memcpy(address.bytes, previous.mac, MAC_ADDRESS_SIZE);
+            if (previous.used && address != peer.address) {
+                remove_peer(address);
+            }
+        }
+    }
+    return error;
+}
+
+esp_err_t retain_first_peer() {
+    LifecycleGuard guard;
+    const PeerStore old = load_store();
+    if (old.count <= 1) {
+        return ESP_OK;
+    }
+    for (const auto& stored : old.peers) {
+        if (!stored.used) {
+            continue;
+        }
+        PeerConfig peer = {};
+        memcpy(peer.address.bytes, stored.mac, MAC_ADDRESS_SIZE);
+        memcpy(peer.lmk, stored.lmk, KEY_SIZE);
+        peer.channel = stored.last_channel;
+        peer.encrypted = true;
+        return save_peer(peer, stored.last_channel, stored.reserved_role, true);
+    }
+    return ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t update_peer_channel(const MacAddress& address, uint8_t channel) {
+    LifecycleGuard guard;
     PeerStore store = load_store();
     for (auto& peer : store.peers) {
         if (peer.used && memcmp(peer.mac, address.bytes, sizeof(peer.mac)) == 0) {
@@ -99,6 +138,7 @@ esp_err_t update_peer_channel(const MacAddress& address, uint8_t channel) {
 }
 
 esp_err_t erase_peer(const EspNowLink::MacAddress& address) {
+    LifecycleGuard guard;
     PeerStore store = load_store();
     for (auto& peer : store.peers) {
         if (peer.used && memcmp(peer.mac, address.bytes, sizeof(peer.mac)) == 0) {
@@ -114,6 +154,7 @@ esp_err_t erase_peer(const EspNowLink::MacAddress& address) {
 }
 
 esp_err_t erase_all_peers() {
+    LifecycleGuard guard;
     PeerStore store = default_store();
     return stored_peers.set(store);
 }
@@ -123,6 +164,7 @@ size_t saved_peer_count() {
 }
 
 esp_err_t read_saved_peer(size_t index, SavedPeer* output) {
+    LifecycleGuard guard;
     if (output == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -135,6 +177,7 @@ esp_err_t read_saved_peer(size_t index, SavedPeer* output) {
         if (current++ == index) {
             memcpy(output->address.bytes, peer.mac, sizeof(peer.mac));
             output->last_channel = peer.last_channel;
+            output->role = peer.reserved_role;
             return ESP_OK;
         }
     }
@@ -142,6 +185,7 @@ esp_err_t read_saved_peer(size_t index, SavedPeer* output) {
 }
 
 void restore_peers() {
+    LifecycleGuard guard;
     PeerStore store = load_store();
     for (const auto& stored : store.peers) {
         if (!stored.used) {

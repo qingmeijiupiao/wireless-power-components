@@ -27,6 +27,27 @@ extern const MacAddress BROADCAST_ADDRESS;
 struct SavedPeer {
     MacAddress address;
     uint8_t    last_channel;
+    uint8_t    role = 0; /**< 应用定义的角色编号；0 为旧协议未知角色。 */
+};
+
+/** 通用配对策略；角色编号 1..31 及接受掩码由产品定义，链路不解释其业务含义。 */
+struct PairingConfig {
+    uint8_t local_role = 0;
+    uint32_t accepted_roles = 0; /**< 0 接受任意角色；否则 bit(role) 为允许项。 */
+    uint8_t peer_limit = 3;      /**< 1..3，不改变 V1 NVS 布局。 */
+    bool replace_existing = false; /**< 仅 peer_limit=1 可用，成功时原子替换旧绑定。 */
+    bool allow_legacy = true;   /**< 允许角色未知、仅链路确认的旧协议对端。 */
+    uint32_t scan_timeout_ms = 15000; /**< 主动配对总时限，1000..60000 ms。 */
+};
+
+/** 单次配对终态快照；serial 每次终结递增，可用于产品层去重记录。 */
+struct PairingResult {
+    uint32_t serial = 0;
+    MacAddress peer = {};
+    uint8_t channel = 0;
+    esp_err_t error = ESP_ERR_INVALID_STATE;
+    bool initiator = false;
+    bool legacy = false; /**< 旧对端不提供持久化结果确认。 */
 };
 
 /** 业务包交付语义。 */
@@ -68,6 +89,7 @@ enum class SendResult : uint8_t {
     NO_ACK,
     SUBMIT_FAILED,
     MAC_FAILED,
+    CANCELLED, /**< 被新控制代际取消，已提交驱动的帧仍可能到达对端。 */
 };
 
 using MessageHandler = void (*)(const Message& message, void* context);
@@ -117,7 +139,7 @@ struct PeerMetrics {
 
 /** @brief 创建固定队列和链路任务，并监听 WiFi 驱动启停。 */
 esp_err_t init();
-/** @brief 注销监听器并释放链路任务和队列。 */
+/** @brief 注销监听器并释放任务/队列；禁止从 Link 回调调用，须与 init/deinit 串行。 */
 esp_err_t deinit();
 /** @return true 表示链路资源已经初始化。 */
 bool      is_initialized();
@@ -143,6 +165,16 @@ esp_err_t send(const MacAddress& destination, uint16_t message_id, const void* p
                const SendOptions& options = {}, SendCallback callback = nullptr, void* context = nullptr);
 
 /**
+ * @brief 取消此前提交的业务发送及后续重传（任务上下文）。
+ * @note 不取消协议 ACK，也不撤回已经交给射频驱动的帧。作用于所有 send() 请求，
+ *       包括配对报文；不修改 peer/NVS。新发送属于新代际，队满仍需调用者重试。
+ *       回调在链路任务执行，结果 CANCELLED。并发发送以代际采样时刻划分。
+ */
+void cancel_transmissions();
+/** @brief ISR 版本：只更新 DRAM 代际，禁止队列/驱动/日志操作。 */
+void cancel_transmissions_from_isr();
+
+/**
  * @brief 注册 message_id 处理函数
  * @note handler 在 espnow_link 任务上下文中执行，必须快速返回。
  */
@@ -166,10 +198,14 @@ uint16_t get_channel_probe_timeout_ms(const MacAddress& peer);
 
 /** @brief 允许本机响应其他设备的配对请求；timeout_ms 为 0 时持续到成功或手动退出。 */
 esp_err_t enter_pairing_mode(uint32_t timeout_ms = 60000);
-/** @brief 退出响应式或主动配对流程。 */
+/** @brief 取消响应式/主动配对和信道恢复；普通任务等待清理，Link 回调内仅提交取消。 */
 void      leave_pairing_mode();
 /** @return true 表示当前处于任一配对流程。 */
 bool      is_pairing();
+/** @brief 配置配对策略；仅空闲时可调用，单绑定迁移保留现有第一个 peer。 */
+esp_err_t configure_pairing(const PairingConfig& config);
+/** @brief 获取最近一次配对终态；无结果时 serial=0。线程安全，不阻塞。 */
+void      get_pairing_result(PairingResult* result);
 /** @brief 主动扫描并向可配对设备发起配对。 */
 esp_err_t start_pairing();
 /** @brief 异步扫描并恢复指定 peer 的信道。 */
@@ -182,6 +218,8 @@ esp_err_t get_channel_recovery_result();
 size_t    get_saved_peer_count();
 /** @brief 按逻辑索引读取一个已保存 peer。 */
 esp_err_t get_saved_peer(size_t index, SavedPeer* peer);
+/** @brief 更新应用角色元数据，范围 0..31；不修改密钥/信道，不允许配对或恢复中调用。 */
+esp_err_t set_saved_peer_role(const MacAddress& peer, uint8_t role);
 /** @brief 删除指定已保存 peer。 */
 esp_err_t remove_saved_peer(const MacAddress& address);
 /** @brief 清除全部已保存 peer。 */

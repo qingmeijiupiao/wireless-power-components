@@ -15,13 +15,19 @@ constexpr uint16_t MSG_DISCOVERY_RESPONSE     = 0x0101;
 constexpr uint16_t MSG_PAIR_REQUEST           = 0x0102;
 constexpr uint16_t MSG_PAIR_RESPONSE          = 0x0103;
 constexpr uint16_t MSG_PAIR_CONFIRM           = 0x0104;
+// 扩展 ID 独立于 V1：旧设备可忽略，新设备不改变旧消息长度。
+constexpr uint16_t MSG_DISCOVERY_INFO         = 0x0105;
+constexpr uint16_t MSG_PAIR_REQUEST_V2        = 0x0112;
+constexpr uint16_t MSG_PAIR_RESPONSE_V2       = 0x0113;
+constexpr uint16_t MSG_PAIR_RESULT            = 0x0115;
+constexpr uint16_t MSG_PAIR_RESULT_QUERY      = 0x0116;
 constexpr size_t   MAX_SAVED_PEERS            = 3;
 constexpr uint32_t STORE_MAGIC                = 0x4e4f5750;
 constexpr uint8_t  STORE_VERSION              = 1;
 
 struct StoredPeer {
     uint8_t used;
-    uint8_t reserved_role; /**< 存储布局占位，不参与链路逻辑。 */
+    uint8_t reserved_role; /**< 应用角色元数据，复用 V1 占位字节；0 表示旧记录未知角色。 */
     uint8_t mac[MAC_ADDRESS_SIZE];
     uint8_t lmk[KEY_SIZE];
     uint8_t last_channel;
@@ -37,35 +43,14 @@ struct PeerStore {
     uint32_t   checksum;
 };
 
-enum class PairEventType : uint8_t {
-    START_PAIRING,
-    START_CHANNEL_RECOVERY,
-    DISCOVERY_PING,
-    DISCOVERY_RESPONSE,
-    PAIR_REQUEST,
-    PAIR_RESPONSE,
-    PAIR_CONFIRM,
-    PAIR_RESPONSE_SENT,
-    CONFIRM_RESULT,
-    CHANNEL_PROBE,
-    CHANNEL_PROBE_RESPONSE,
-};
-
-struct PairEvent {
-    PairEventType type;
-    MacAddress    source;
-    uint32_t      nonce;
-    uint8_t       channel;
-    uint8_t       lmk[KEY_SIZE];
-    SendResult    send_result;
-};
-
 /** @brief 计算 peer 持久化表校验值。 */
 uint32_t  calculate_checksum(const PeerStore& store);
 /** @brief 从 NVS 读取并校验 peer 持久化表。 */
 PeerStore load_store();
 /** @brief 保存或更新一个已配对 peer。 */
-esp_err_t save_peer(const PeerConfig& peer, uint8_t channel);
+esp_err_t save_peer(const PeerConfig& peer, uint8_t channel, uint8_t role = 0, bool replace = false);
+/** @brief 将旧多绑定记录原子迁移为首个绑定，并移除其余运行期 peer。 */
+esp_err_t retain_first_peer();
 /** @brief 更新已保存 peer 的最近信道。 */
 esp_err_t update_peer_channel(const MacAddress& address, uint8_t channel);
 /** @brief 删除指定已保存 peer。 */
@@ -94,6 +79,8 @@ size_t encode_pair_response(uint32_t nonce, const uint8_t lmk[KEY_SIZE], uint8_t
 
 /** @brief 初始化配对事件队列和后台任务。 */
 esp_err_t init_pairing();
+/** @brief 释放配对任务/回调/队列；在销毁 Link 队列之前调用。 */
+void deinit_pairing();
 
 } // namespace EspNowLink::Internal
 

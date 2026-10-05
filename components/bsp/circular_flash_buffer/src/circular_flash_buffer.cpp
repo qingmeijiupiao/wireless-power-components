@@ -84,10 +84,8 @@ esp_err_t CircularFlashBuffer::init(const char* partition_name, size_t block_siz
     const esp_partition_t* _partition =
         esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, partition_name);
     if (_partition == nullptr) {
-        while (1) {
-            ESP_LOGE("CircularFlashBuffer", "Partition not found: %s", partition_name);
-            vTaskDelay(1000);
-        }
+        ESP_LOGE("CircularFlashBuffer", "Partition not found: %s", partition_name);
+        return ESP_ERR_NOT_FOUND;
     }
 
     cfb_partition = (esp_partition_t*)_partition;

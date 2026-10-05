@@ -8,6 +8,24 @@
 
 namespace EspNowService {
 
+/** 系列产品角色仅由产品协议解释，通用 Link 不依赖此枚举。 */
+enum class PairingRole : uint8_t { UNKNOWN = 0, METER = 1, BUTTON = 2, EMERGENCY_STOP = 3 };
+
+/** @brief 构造产品配对策略：开关单目标替换，功率计允许三只开关。 */
+inline EspNowLink::PairingConfig pairing_config(PairingRole role) {
+    EspNowLink::PairingConfig config = {};
+    config.local_role = static_cast<uint8_t>(role);
+    if (role == PairingRole::METER) {
+        config.accepted_roles = (1UL << static_cast<uint8_t>(PairingRole::BUTTON)) |
+                                (1UL << static_cast<uint8_t>(PairingRole::EMERGENCY_STOP));
+    } else {
+        config.accepted_roles = 1UL << static_cast<uint8_t>(PairingRole::METER);
+        config.peer_limit = 1;
+        config.replace_existing = true;
+    }
+    return config;
+}
+
 /** 远程输出控制动作。 */
 enum class SwitchAction : uint8_t {
     OFF = 0,
@@ -48,6 +66,9 @@ struct RemoteSwitchStatus {
     bool connected = false;
     bool battery_valid = false;
     uint8_t battery_percent = 0;
+    EspNowLink::MacAddress address = {};
+    uint8_t role = 0;
+    int64_t last_seen_us = 0;
 };
 
 /** 收到控制响应时通知请求方。 */
@@ -78,6 +99,7 @@ constexpr uint16_t MSG_SWITCH_REQUEST = 0x0200;
 constexpr uint16_t MSG_SWITCH_RESPONSE = 0x0201;
 constexpr uint16_t MSG_REMOTE_BATTERY = 0x0202;
 constexpr uint16_t MSG_SWITCH_DETAIL = 0x0203;
+constexpr uint16_t MSG_REMOTE_INTERLOCK = 0x0204; /**< 急停可靠单播：1 字节禁止开启标志 0/1。 */
 constexpr uint16_t MSG_DATA_REQUEST = 0x0210;
 constexpr uint16_t MSG_DATA_RESPONSE = 0x0211;
 constexpr uint16_t MSG_DATA_PERIODIC = 0x0212;

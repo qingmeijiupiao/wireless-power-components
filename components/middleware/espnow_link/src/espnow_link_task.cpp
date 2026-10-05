@@ -32,14 +32,27 @@ uint16_t timeout_for(const SendRequest& request) {
 }
 
 void finish_pending(SendResult result) {
-    if (pending.request.callback != nullptr) {
-        pending.request.callback(result, pending.sequence, pending.request.context);
-    }
+    const SendRequest request = pending.request;
+    const uint32_t sequence = pending.sequence;
     pending = {};
+    if (request.callback != nullptr) {
+        request.callback(result, sequence, request.context);
+    }
+}
+
+bool cancel_pending_if_stale() {
+    if (pending.active && pending.request.generation != get_transmission_generation()) {
+        finish_pending(SendResult::CANCELLED);
+        return true;
+    }
+    return false;
 }
 
 esp_err_t submit_pending(bool retry) {
     if (driver_owner != DriverOwner::NONE) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (pending.request.generation != get_transmission_generation()) {
         return ESP_ERR_INVALID_STATE;
     }
     // IDF 建议等待前一次发送完成回调后再提交下一帧，因此全组件只保留一个驱动在途帧。
@@ -66,6 +79,10 @@ esp_err_t submit_pending(bool retry) {
 }
 
 void start_send(const SendRequest& request) {
+    if (request.generation != get_transmission_generation()) {
+        if (request.callback) request.callback(SendResult::CANCELLED, 0, request.context);
+        return;
+    }
     if (pending.active || !active) {
         if (request.callback != nullptr) {
             request.callback(SendResult::SUBMIT_FAILED, 0, request.context);
@@ -94,7 +111,7 @@ void start_send(const SendRequest& request) {
         increment_counter(&statistics.tx_best_effort_packets);
     }
     if (submit_pending(false) != ESP_OK) {
-        finish_pending(SendResult::SUBMIT_FAILED);
+        if (!cancel_pending_if_stale()) { finish_pending(SendResult::SUBMIT_FAILED); }
     }
 }
 
@@ -156,6 +173,7 @@ void update_rtt(PeerEntry* peer) {
 }
 
 void process_ack(const RxEvent& event, const ParsedFrame& frame) {
+    cancel_pending_if_stale();
     if (!pending.active) {
         // 事务已结束后才到达的迟到/重复 ACK（重传时对端可能对同一序号重复回 ACK）。
         // 这类包不代表时序异常，单独计入 late_acks，避免污染 timing_errors。
@@ -180,6 +198,15 @@ void process_ack(const RxEvent& event, const ParsedFrame& frame) {
 }
 
 } // namespace
+
+void reset_transmit_state() {
+    // 取消回调仍由链路任务执行；deactivate 已切换代际并禁止新发送。
+    driver_owner = DriverOwner::NONE;
+    active_ack = {};
+    if (rx_queue) xQueueReset(rx_queue);
+    if (mac_queue) xQueueReset(mac_queue);
+    if (ack_queue) xQueueReset(ack_queue);
+}
 
 void process_received_event(const RxEvent& event) {
     ParsedFrame frame = {};
@@ -250,6 +277,7 @@ void process_received_event(const RxEvent& event) {
 }
 
 void process_mac_result(const MacResultEvent& event) {
+    cancel_pending_if_stale();
     if (driver_owner == DriverOwner::NONE) {
         return;
     }
@@ -281,6 +309,7 @@ void process_mac_result(const MacResultEvent& event) {
 }
 
 void process_timeout() {
+    if (cancel_pending_if_stale()) { return; }
     if (!pending.active || !pending.waiting_ack || driver_owner != DriverOwner::NONE) {
         return;
     }
@@ -296,15 +325,19 @@ void process_timeout() {
         return;
     }
     if (submit_pending(true) != ESP_OK) {
-        finish_pending(SendResult::SUBMIT_FAILED);
+        if (!cancel_pending_if_stale()) { finish_pending(SendResult::SUBMIT_FAILED); }
     }
 }
 
 void link_task(void*) {
     while (true) {
+        {
+        LifecycleGuard guard;
+        // 保留 driver_owner，等旧驱动完成后再发新帧；取消仅终止业务重传。
+        cancel_pending_if_stale();
         // 优先清空接收与发送完成事件，降低 ACK 和控制包处理延时。
         RxEvent event = {};
-        while (xQueueReceive(rx_queue, &event, 0) == pdTRUE) {
+        for (size_t n = 0; n < RX_QUEUE_LENGTH && xQueueReceive(rx_queue, &event, 0) == pdTRUE; ++n) {
             process_received_event(event);
         }
 
@@ -313,16 +346,19 @@ void link_task(void*) {
             process_mac_result(mac_result);
         }
 
-        if (driver_owner == DriverOwner::NONE) {
+        if (active && driver_owner == DriverOwner::NONE) {
             submit_next_ack();
         }
         if (!pending.active && driver_owner == DriverOwner::NONE) {
             SendRequest request = {};
-            if (xQueueReceive(tx_queue, &request, 0) == pdTRUE) {
+            // 清除旧代际队列，使新的 OFF 无需等待旧 ON/遥测逐拍出队。
+            for (size_t n = 0; n < TX_QUEUE_LENGTH && !pending.active &&
+                 driver_owner == DriverOwner::NONE && xQueueReceive(tx_queue, &request, 0) == pdTRUE; ++n) {
                 start_send(request);
             }
         }
         process_timeout();
+        }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

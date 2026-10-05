@@ -56,8 +56,8 @@ esp_err_t read_data(bool check_channel = true);
 
 /**
  * @brief 启动遥控端配对扫描
- * @param clear_first true 先清除运行期 peer 和 NVS 配对记录
- * @return ESP_OK 已提交配对事件，其他值表示清除或配对启动失败
+ * @param clear_first 保留的兼容参数；重配始终保留旧绑定直到新绑定提交成功。
+ * @return ESP_OK 已提交配对事件，其他值表示启动失败
  */
 esp_err_t start_pairing(bool clear_first);
 

@@ -1,5 +1,6 @@
 #ifndef ESPNOW_LINK_INTERNAL_H
 #define ESPNOW_LINK_INTERNAL_H
+#include <atomic>
 #include "sdkconfig.h"
 
 #include "esp_now.h"
@@ -7,10 +8,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 namespace EspNowLink::Internal {
 
-constexpr size_t      MAX_HANDLERS           = 16;
+constexpr size_t      MAX_HANDLERS           = 24;
 constexpr size_t      MAX_PEERS              = 7;
 constexpr size_t      RX_QUEUE_LENGTH        = 16;
 constexpr size_t      TX_QUEUE_LENGTH        = 16;
@@ -49,6 +51,7 @@ struct RxEvent {
 };
 
 struct SendRequest {
+    uint32_t     generation; /**< 发送所属取消代际，出队/重传前检查。 */
     MacAddress   destination;
     uint16_t     message_id;
     uint16_t     payload_size;
@@ -82,8 +85,8 @@ struct PendingTransmission {
     uint8_t     frame[250];
 };
 
-extern bool                initialized;
-extern bool                active;
+extern std::atomic_bool    initialized;
+extern std::atomic_bool    active;
 extern QueueHandle_t       rx_queue;
 extern QueueHandle_t       tx_queue;
 extern QueueHandle_t       mac_queue;
@@ -94,10 +97,33 @@ extern PeerEntry           peers[MAX_PEERS];
 extern PendingTransmission pending;
 extern SendOptions         default_reliable_options;
 extern LinkStatistics      statistics;
+extern uint32_t            transmission_generation;
+/** @brief 读取取消代际；临界区与 ISR 取消共用同一把短锁。 */
+uint32_t get_transmission_generation();
 extern uint32_t            next_sequence;
 extern uint32_t            local_session_id;
 extern portMUX_TYPE        statistics_lock;
 extern portMUX_TYPE        state_lock;
+extern SemaphoreHandle_t   lifecycle_mutex;
+
+/** 串行化驱动操作与链路推进，回调重入同一任务时允许递归持锁。 */
+class LifecycleGuard {
+public:
+    LifecycleGuard() : mutex_(lifecycle_mutex) {
+        if (mutex_ != nullptr) {
+            xSemaphoreTakeRecursive(mutex_, portMAX_DELAY);
+        }
+    }
+    ~LifecycleGuard() {
+        if (mutex_ != nullptr) {
+            xSemaphoreGiveRecursive(mutex_);
+        }
+    }
+    LifecycleGuard(const LifecycleGuard&) = delete;
+    LifecycleGuard& operator=(const LifecycleGuard&) = delete;
+private:
+    SemaphoreHandle_t mutex_;
+};
 
 /** @brief 查找指定 MAC 对应的运行期 peer。 */
 PeerEntry* find_peer(const MacAddress& address);
@@ -111,6 +137,8 @@ void       process_mac_result(const MacResultEvent& event);
 void       process_timeout();
 /** @brief ESP-NOW 链路任务入口。 */
 void       link_task(void* context);
+/** @brief 射频关闭时清除驱动所有权及旧队列；调用者必须独占/暂停链路任务。 */
+void       reset_transmit_state();
 /** @brief 在 WiFi 射频启动后激活 ESP-NOW 链路。 */
 esp_err_t  activate();
 /** @brief 在 WiFi 射频停止前停用 ESP-NOW 链路。 */
