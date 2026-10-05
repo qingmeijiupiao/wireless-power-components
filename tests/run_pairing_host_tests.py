@@ -367,20 +367,21 @@ using namespace EspNowService::RemoteRegistry;
 int main() {
  EspNowLink::MacAddress a={{1,1,1,1,1,1}},b={{2,2,2,2,2,2}},stop={{3,3,3,3,3,3}};
  saved={{a,1,2},{b,1,2},{stop,1,3}}; refresh_bindings();
- assert(is_inhibited()); // A persisted emergency binding starts with unknown authorization.
+ assert(!is_inhibited()); // No interlock heartbeat yet: an emergency binding does not block.
  observe(a,31); ++test_tick; observe(b,82);
  RemoteSwitchStatus status{}; assert(get(a,status) && status.battery_percent==31);
  assert(get(b,status) && status.battery_percent==82);
  assert(latest(status) && status.address==b);
  set_interlock(stop,false); assert(!is_inhibited());
  set_interlock(a,true); assert(!is_inhibited()); // A button cannot impersonate an emergency role.
- test_tick+=3001; observe(stop); assert(is_inhibited()); // Telemetry is not an authorization heartbeat.
+ set_interlock(stop,true); assert(is_inhibited());
+ test_tick+=5001; observe(stop); assert(!is_inhibited()); // Heartbeat timeout releases; telemetry is not an authorization heartbeat.
  set_interlock(stop,true); refresh_bindings(); assert(is_inhibited());
  set_interlock(stop,false); assert(!is_inhibited());
  saved.erase(saved.begin()+1); refresh_bindings(); assert(!get(b,status));
  assert(get(a,status) && status.battery_percent==31);
  // Simulate a registry restart: saved role remains, runtime authorization must be established again.
- auto bindings=saved; saved.clear(); refresh_bindings(); saved=bindings; refresh_bindings(); assert(is_inhibited());
+ auto bindings=saved; saved.clear(); refresh_bindings(); saved=bindings; refresh_bindings(); assert(!is_inhibited()); set_interlock(stop,true); assert(is_inhibited()); // Restart re-authorizes via heartbeat.
  saved[1].role=0; saved.clear(); refresh_bindings(); saved={{stop,1,0}}; refresh_bindings();
  set_interlock(stop,true); persist_roles(); assert(saved[0].role==3 && is_inhibited());
 }

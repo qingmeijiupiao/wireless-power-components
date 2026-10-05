@@ -12,7 +12,9 @@ void observe(const EspNowLink::MacAddress &peer, int battery_percent = -1);
 void set_interlock(const EspNowLink::MacAddress &peer, bool inhibited);
 /** @brief 维护任务持久化已识别的急停角色，不在接收回调写 NVS。 */
 void persist_roles();
-/** @brief 已绑定急停未知、禁止开启或心跳超过 3 秒时返回 true；短临界区。 */
+/** @brief 设置急停无通信后停止阻止开启的时限，默认 5000ms；短临界区。 */
+void set_interlock_timeout_ms(uint32_t timeout_ms);
+/** @brief 仅当已绑定的急停正在通信且请求禁止开启时返回 true；无通信超过时限即放行，短临界区。 */
 bool is_inhibited();
 /** @brief 查询指定已绑定开关；connected 表示最近 3 秒内收到活动。 */
 bool get(const EspNowLink::MacAddress &peer, RemoteSwitchStatus &status);

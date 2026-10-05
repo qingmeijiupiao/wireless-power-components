@@ -8,6 +8,7 @@ namespace EspNowService::RemoteRegistry {
 namespace {
 constexpr size_t MAX_REMOTES = 3;
 constexpr int64_t HEARTBEAT_TIMEOUT_US = 3000000;
+constexpr int64_t DEFAULT_INTERLOCK_TIMEOUT_US = 5000000;
 constexpr char TAG[] = "RemoteRegistry";
 struct Entry {
     bool used = false;
@@ -18,6 +19,7 @@ struct Entry {
 };
 portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 Entry entries[MAX_REMOTES] = {};
+int64_t interlock_timeout_us = DEFAULT_INTERLOCK_TIMEOUT_US;
 
 Entry *find(const EspNowLink::MacAddress &peer) {
     for (auto &entry : entries) {
@@ -28,6 +30,7 @@ Entry *find(const EspNowLink::MacAddress &peer) {
     return nullptr;
 }
 bool recent(int64_t timestamp, int64_t now) { return timestamp > 0 && now - timestamp < HEARTBEAT_TIMEOUT_US; }
+bool within(int64_t timestamp, int64_t now, int64_t window) { return timestamp > 0 && now - timestamp < window; }
 } // namespace
 
 void refresh_bindings() {
@@ -101,13 +104,19 @@ void persist_roles() {
         }
     }
 }
+void set_interlock_timeout_ms(uint32_t timeout_ms) {
+    portENTER_CRITICAL(&lock);
+    interlock_timeout_us = timeout_ms == 0 ? DEFAULT_INTERLOCK_TIMEOUT_US : static_cast<int64_t>(timeout_ms) * 1000;
+    portEXIT_CRITICAL(&lock);
+}
 bool is_inhibited() {
     const int64_t now = esp_timer_get_time();
     bool inhibited = false;
     portENTER_CRITICAL(&lock);
     for (const auto &entry : entries) {
+        // 仅在急停已识别、正在请求禁止开启且心跳未超时时阻止；失联/休眠超过时限即放行。
         if (entry.used && entry.status.role == static_cast<uint8_t>(PairingRole::EMERGENCY_STOP) &&
-            (!entry.interlock_known || entry.inhibited || !recent(entry.interlock_at_us, now))) {
+            entry.interlock_known && entry.inhibited && within(entry.interlock_at_us, now, interlock_timeout_us)) {
             inhibited = true;
             break;
         }
